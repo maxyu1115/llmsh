@@ -1,6 +1,6 @@
 use nix::fcntl::{open, fcntl, FcntlArg, OFlag};
 use nix::pty::*;
-use nix::sys::termios::{self, Termios, InputFlags, LocalFlags, SetArg};
+use nix::sys::termios::{self, Termios, SetArg};
 use nix::unistd::*;
 use nix::sys::wait::*;
 use mio::{Events, Interest, Poll, Token};
@@ -9,15 +9,15 @@ use std::io::Write;
 use std::os::unix::io::AsRawFd;
 use std::ffi::CString;
 
+mod messages;
+
 const MASTER: Token = Token(0);
 const STDIN: Token = Token(1);
 
 fn set_raw_mode(fd: i32) -> Termios {
     let original_termios = termios::tcgetattr(fd).expect("Failed to get terminal attributes");
     let mut raw_termios = original_termios.clone();
-    // Modify input and local flags to disable canonical mode, echoing, signal handling, etc.
-    raw_termios.input_flags &= !(InputFlags::ICRNL | InputFlags::IXON);
-    raw_termios.local_flags &= !(LocalFlags::ECHO | LocalFlags::ICANON | LocalFlags::ISIG | LocalFlags::IEXTEN);
+    termios::cfmakeraw(&mut raw_termios);
     termios::tcsetattr(fd, SetArg::TCSANOW, &raw_termios).expect("Failed to set terminal to raw mode");
     original_termios
 }
@@ -37,6 +37,7 @@ fn main() {
     unlockpt(&master_fd).expect("Failed to unlock PTY");
 
     // Get the name of the slave PTY
+    // FIXME: ptsname_r does not work on windows/mac
     let slave_name = ptsname_r(&master_fd).expect("Failed to get slave PTY name");
 
     // Fork the process
@@ -59,7 +60,7 @@ fn main() {
             // Set terminal to raw mode
             let original_termios = set_raw_mode(stdin_fd);
 
-            let mut buffer = [0; 1024];
+            let mut input_buffer: [u8; 1024] = [0; 1024];
             let mut child_exited = false;
 
             loop {
@@ -68,11 +69,12 @@ fn main() {
                 for event in events.iter() {
                     match event.token() {
                         MASTER => {
-                            let n = read(master_fd, &mut buffer);
+                            let n = read(master_fd, &mut input_buffer);
                             match n {
                                 Ok(n) if n > 0 => {
                                     // Write data from master PTY to stdout
-                                    std::io::stdout().write_all(&buffer[..n]).expect("Failed to write to stdout");
+                                    std::io::stdout().write_all(&input_buffer[..n]).expect("Failed to write to stdout");
+                                    // std::io::stdout().write_all(&input_buffer[..n]).expect("Failed to write to stdout");
                                     std::io::stdout().flush().expect("Failed to flush stdout");
                                 },
                                 Ok(_) => {},
@@ -85,11 +87,11 @@ fn main() {
                             }
                         },
                         STDIN => {
-                            let n = read(stdin_fd, &mut buffer);
+                            let n = read(stdin_fd, &mut input_buffer);
                             match n {
                                 Ok(n) if n > 0 => {
                                     // Write data from stdin to master PTY
-                                    write(master_fd, &buffer[..n]).expect("Failed to write to master_fd");
+                                    write(master_fd, &input_buffer[..n]).expect("Failed to write to master_fd");
                                 },
                                 Ok(_) => {},
                                 Err(e) => panic!("Failed to read from stdin: {}", e),
