@@ -5,8 +5,10 @@ use nix::unistd::*;
 use nix::sys::wait::*;
 use mio::{Events, Interest, Poll, Token};
 use mio::unix::SourceFd;
+use std::env;
 use std::io::Write;
 use std::os::unix::io::AsRawFd;
+use std::os::fd::AsFd;
 use std::ffi::CString;
 
 mod messages;
@@ -14,7 +16,7 @@ mod messages;
 const MASTER: Token = Token(0);
 const STDIN: Token = Token(1);
 
-fn set_raw_mode(fd: i32) -> Termios {
+fn set_raw_mode<Fd: AsFd>(fd: &Fd) -> Termios {
     let original_termios = termios::tcgetattr(fd).expect("Failed to get terminal attributes");
     let mut raw_termios = original_termios.clone();
     termios::cfmakeraw(&mut raw_termios);
@@ -22,7 +24,7 @@ fn set_raw_mode(fd: i32) -> Termios {
     original_termios
 }
 
-fn restore_terminal(fd: i32, termios: &Termios) {
+fn restore_terminal<Fd: AsFd>(fd: Fd, termios: &Termios) {
     termios::tcsetattr(fd, SetArg::TCSANOW, termios).expect("Failed to restore terminal attributes");
 }
 
@@ -47,18 +49,19 @@ fn main() {
             let mut poll = Poll::new().expect("Failed to create Poll instance");
             let mut events = Events::with_capacity(1024);
 
-            let master_fd = master_fd.as_raw_fd();
-            let stdin_fd = std::io::stdin().as_raw_fd();
+            let raw_master_fd = master_fd.as_raw_fd();
+            let stdin_fd = std::io::stdin();
+            let raw_stdin_fd = stdin_fd.as_raw_fd();
 
-            fcntl(master_fd, FcntlArg::F_SETFL(OFlag::O_NONBLOCK)).expect("Failed to set non-blocking");
-            fcntl(stdin_fd, FcntlArg::F_SETFL(OFlag::O_NONBLOCK)).expect("Failed to set non-blocking");
+            fcntl(raw_master_fd, FcntlArg::F_SETFL(OFlag::O_NONBLOCK)).expect("Failed to set non-blocking");
+            fcntl(raw_stdin_fd, FcntlArg::F_SETFL(OFlag::O_NONBLOCK)).expect("Failed to set non-blocking");
 
             // Register the master PTY and stdin file descriptors with the poll instance
-            poll.registry().register(&mut SourceFd(&master_fd), MASTER, Interest::READABLE).expect("Failed to register master_fd");
-            poll.registry().register(&mut SourceFd(&stdin_fd), STDIN, Interest::READABLE).expect("Failed to register stdin_fd");
+            poll.registry().register(&mut SourceFd(&raw_master_fd), MASTER, Interest::READABLE).expect("Failed to register master_fd");
+            poll.registry().register(&mut SourceFd(&raw_stdin_fd), STDIN, Interest::READABLE).expect("Failed to register stdin_fd");
 
             // Set terminal to raw mode
-            let original_termios = set_raw_mode(stdin_fd);
+            let original_termios = set_raw_mode(&stdin_fd);
 
             let mut input_buffer: [u8; 1024] = [0; 1024];
             let mut child_exited = false;
@@ -69,7 +72,7 @@ fn main() {
                 for event in events.iter() {
                     match event.token() {
                         MASTER => {
-                            let n = read(master_fd, &mut input_buffer);
+                            let n = read(raw_master_fd, &mut input_buffer);
                             match n {
                                 Ok(n) if n > 0 => {
                                     // Write data from master PTY to stdout
@@ -87,11 +90,11 @@ fn main() {
                             }
                         },
                         STDIN => {
-                            let n = read(stdin_fd, &mut input_buffer);
+                            let n = read(raw_stdin_fd, &mut input_buffer);
                             match n {
                                 Ok(n) if n > 0 => {
                                     // Write data from stdin to master PTY
-                                    write(master_fd, &input_buffer[..n]).expect("Failed to write to master_fd");
+                                    write(&master_fd, &input_buffer[..n]).expect("Failed to write to master_fd");
                                 },
                                 Ok(_) => {},
                                 Err(e) => panic!("Failed to read from stdin: {}", e),
@@ -131,9 +134,11 @@ fn main() {
             // Close the slave PTY file descriptor
             close(slave_fd).expect("Failed to close slave PTY file descriptor");
 
+            // TODO: use /bin/sh when no SHELL set
+            let shell_name: String = env::var("SHELL").expect("No SHELL set");
+
             // Execute the bash shell
-            let shell = CString::new("/bin/bash").expect("Failed to create CString");
-            // let shell = CString::new("/bin/sh").expect("Failed to create CString");
+            let shell: CString = CString::new(shell_name).expect("Failed to create CString");
             execvp(&shell, &[shell.clone()]).expect("Failed to execute bash shell");
         }
     }
