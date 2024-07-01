@@ -6,15 +6,22 @@ use nix::sys::wait::*;
 use mio::{Events, Interest, Poll, Token};
 use mio::unix::SourceFd;
 use std::env;
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::unix::io::AsRawFd;
 use std::os::fd::AsFd;
+use std::path::Path;
 use std::ffi::CString;
+use tempfile::NamedTempFile;
 
 mod messages;
 
 const MASTER: Token = Token(0);
 const STDIN: Token = Token(1);
+
+const PROMPT_INPUT_START: &str = "##LLMSH-CMD-START##\n";
+const PROMPT_INPUT_END: &str = "##LLMSH-CMD-END##\n";
+const PROMPT_OUTPUT_END: &str = "##LLMSH-OUT-END##\n";
 
 fn set_raw_mode<Fd: AsFd>(fd: &Fd) -> Termios {
     let original_termios = termios::tcgetattr(fd).expect("Failed to get terminal attributes");
@@ -28,7 +35,17 @@ fn restore_terminal<Fd: AsFd>(fd: Fd, termios: &Termios) {
     termios::tcsetattr(fd, SetArg::TCSANOW, termios).expect("Failed to restore terminal attributes");
 }
 
+fn touch(path: &Path) -> std::io::Result<()> {
+    match OpenOptions::new().create(true).write(true).open(path) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 fn main() {
+    let home_dir = env::var("HOME").expect("Could not get home directory");
+    touch(&Path::new(&home_dir).join(".llmshrc")).expect("Failed to touch ~/.llmshrc");
+
     // Open a new PTY master and get the file descriptor
     let master_fd = posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY).expect("Failed to open PTY master");
 
@@ -136,10 +153,39 @@ fn main() {
 
             // TODO: use /bin/sh when no SHELL set
             let shell_name: String = env::var("SHELL").expect("No SHELL set");
-
-            // Execute the bash shell
             let shell: CString = CString::new(shell_name).expect("Failed to create CString");
-            execvp(&shell, &[shell.clone()]).expect("Failed to execute bash shell");
+
+            // Collect the current environment variables
+            let env_vars: Vec<CString> = env::vars().map(
+                |(key, value)| {
+                    CString::new(format!("{}={}", key, value)).unwrap()
+                }
+            ).collect();
+
+            // Create a temporary rc file, so that we use both 
+            let mut temp_rc = NamedTempFile::new().expect("Failed to create NamedTempFile");
+            let _ = writeln!(temp_rc, "source ~/.bashrc");
+            let _ = writeln!(temp_rc, "source ~/.llmshrc");
+
+            // Inject our prompt markers
+            let orig_ps0 = env::var("PS0").unwrap_or_else(|_| String::from(""));
+            let orig_ps1 = env::var("PS1").unwrap_or_else(|_| String::from(""));
+            let _ = temp_rc.write_all(
+                &format!("export PS0=\"{}{}\"\n", String::from(PROMPT_INPUT_END), &orig_ps0).into_bytes()
+            );
+            let _ = temp_rc.write_all(
+                &format!("export PS1=\"{}{}{}\"\n", String::from(PROMPT_OUTPUT_END), &orig_ps1, String::from(PROMPT_INPUT_START)).into_bytes()
+            );
+
+            let temp_filename = temp_rc.path().as_os_str().to_str().unwrap();
+            let args: [_; 3] = [
+                shell.clone(), 
+                CString::new("--rcfile").unwrap(), 
+                CString::new(temp_filename).unwrap()
+            ];
+
+            // Convert to the right format, then pass into the shell
+            execvpe(&shell, &args, &env_vars).expect("Failed to execute bash shell");
         }
     }
 }
