@@ -6,7 +6,7 @@ from vllm.utils import Counter
 from vllm.outputs import RequestOutput
 from vllm import SamplingParams
 from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
-from interfaces import LLM
+from llm.interfaces import LLM
 
 class StreamingLLM:
     def __init__(
@@ -25,7 +25,7 @@ class StreamingLLM:
         self,
         prompt: Optional[str] = None,
         sampling_params: Optional[SamplingParams] = None
-    ) -> iter[RequestOutput]:
+    ) -> list[RequestOutput]:
         
         request_id = str(next(self.request_counter))
         self.llm_engine.add_request(request_id, prompt, sampling_params)
@@ -49,10 +49,12 @@ class Llama3(LLM):
 
     def generate(self, message: str, prompt: str, header:str=None) -> str:
         history_chat_format = []
+        history_chat_format.append({"role": "user", "content": prompt + message})
         
         prompt = self.tokenizer.apply_chat_template(history_chat_format, tokenize=False)
     
         response = ""
-        for chunk in self.llm.generate(message, prompt, self.sampling_params):
+        for chunk in self.llm.generate(prompt, self.sampling_params):
             response = chunk.outputs[0].text
         return response
+    
