@@ -10,7 +10,7 @@ def main():
     socket.bind("ipc:///tmp/hermitd-ipc")
     
     # initiates llm.
-    bot = Bot()
+    bot = Bot(spec=None)
 
     print("Python server is running...")
 
