@@ -5,7 +5,6 @@ use nix::unistd::*;
 use nix::sys::wait::*;
 use mio::{Events, Interest, Poll, Token};
 use mio::unix::SourceFd;
-use shell::ShellParser;
 use std::env;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -15,6 +14,7 @@ use std::path::Path;
 use std::ffi::CString;
 use tempfile::NamedTempFile;
 
+mod io;
 mod messages;
 mod shell;
 
@@ -46,7 +46,7 @@ fn main() {
     touch(&Path::new(&home_dir).join(".llmshrc")).expect("Failed to touch ~/.llmshrc");
 
     // TODO: enhance error handling
-    let shell = shell::get_shell().expect("$SHELL is not set");
+    let mut shell = shell::get_shell().expect("$SHELL is not set");
 
     // Open a new PTY master and get the file descriptor
     let master_fd = posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY).expect("Failed to open PTY master");
@@ -82,7 +82,7 @@ fn main() {
             // Set terminal to raw mode
             let original_termios = set_raw_mode(&stdin_fd);
 
-            let mut input_buffer: [u8; 1024] = [0; 1024];
+            let mut input_buffer: [u8; 4096] = [0; 4096];
             let mut child_exited = false;
 
             loop {
@@ -94,9 +94,13 @@ fn main() {
                             let n = read(raw_master_fd, &mut input_buffer);
                             match n {
                                 Ok(n) if n > 0 => {
-                                    // Write data from master PTY to stdout
-                                    std::io::stdout().write_all(&input_buffer[..n]).expect("Failed to write to stdout");
                                     // std::io::stdout().write_all(&input_buffer[..n]).expect("Failed to write to stdout");
+                                    let parsed_output = shell.parse_output(&input_buffer[..n]);
+                                    // println!("hello 1!");
+                                    for (_, out) in parsed_output {
+                                        // Write data from master PTY to stdout
+                                        std::io::stdout().write_all(&out).expect("Failed to write to stdout");
+                                    }
                                     std::io::stdout().flush().expect("Failed to flush stdout");
                                 },
                                 Ok(_) => {},
@@ -154,8 +158,8 @@ fn main() {
             close(slave_fd).expect("Failed to close slave PTY file descriptor");
 
             // TODO: use /bin/sh when no SHELL set
-            let shell_name: String = env::var("SHELL").expect("$SHELL is not set");
-            let shell_name: CString = CString::new(shell_name).unwrap();
+            let shell_path: String = env::var("SHELL").expect("$SHELL is not set");
+            let shell_path: CString = CString::new(shell_path).unwrap();
 
             // Collect the current environment variables
             let env_vars: Vec<CString> = env::vars().map(
@@ -173,13 +177,13 @@ fn main() {
 
             let temp_filename = temp_rc.path().as_os_str().to_str().unwrap();
             let args: [_; 3] = [
-                shell_name.clone(), 
+                shell_path.clone(), 
                 CString::new("--rcfile").unwrap(), 
                 CString::new(temp_filename).unwrap()
             ];
 
             // Convert to the right format, then pass into the shell
-            execvpe(&shell_name, &args, &env_vars).expect("Failed to execute bash shell");
+            execvpe(&shell_path, &args, &env_vars).expect("Failed to execute bash shell");
         }
     }
 }
