@@ -1,12 +1,15 @@
+use log;
+use simplelog::*;
 use nix::fcntl::{open, fcntl, FcntlArg, OFlag};
+use nix::libc::{ioctl, TIOCSWINSZ, TIOCGWINSZ, winsize};
 use nix::pty::*;
-use nix::sys::termios::{self, Termios, SetArg};
+use nix::sys::termios::{self, SetArg, Termios};
 use nix::unistd::*;
 use nix::sys::wait::*;
 use mio::{Events, Interest, Poll, Token};
 use mio::unix::SourceFd;
 use std::env;
-use std::fs::OpenOptions;
+use std::fs::{OpenOptions, File};
 use std::io::Write;
 use std::os::unix::io::AsRawFd;
 use std::os::fd::AsFd;
@@ -25,6 +28,10 @@ const STDIN: Token = Token(1);
 fn set_raw_mode<Fd: AsFd>(fd: &Fd) -> Termios {
     let original_termios = termios::tcgetattr(fd).expect("Failed to get terminal attributes");
     let mut raw_termios = original_termios.clone();
+    // raw_termios.input_flags &= !(InputFlags::ICRNL | InputFlags::IXON | InputFlags::BRKINT | InputFlags::INPCK | InputFlags::ISTRIP | InputFlags::IXANY);
+    // raw_termios.output_flags &= !termios::OutputFlags::OPOST;
+    // raw_termios.control_flags |= termios::ControlFlags::CS8;
+    // raw_termios.local_flags &= !(LocalFlags::ECHO | LocalFlags::ICANON | LocalFlags::ISIG);
     termios::cfmakeraw(&mut raw_termios);
     termios::tcsetattr(fd, SetArg::TCSANOW, &raw_termios).expect("Failed to set terminal to raw mode");
     original_termios
@@ -32,6 +39,31 @@ fn set_raw_mode<Fd: AsFd>(fd: &Fd) -> Termios {
 
 fn restore_terminal<Fd: AsFd>(fd: Fd, termios: &Termios) {
     termios::tcsetattr(fd, SetArg::TCSANOW, termios).expect("Failed to restore terminal attributes");
+}
+
+// Function to get the terminal window size
+fn get_terminal_size(fd: i32) -> winsize {
+    let mut ws: winsize = winsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    unsafe {
+        if ioctl(fd, TIOCGWINSZ, &mut ws) == -1 {
+            panic!("Failed to get terminal window size");
+        }
+    }
+    return ws;
+}
+
+// Function to set the terminal window size
+fn set_terminal_size(fd: i32, ws: &winsize) {
+    unsafe {
+        if ioctl(fd, TIOCSWINSZ, ws) == -1 {
+            panic!("Failed to set terminal window size");
+        }
+    }
 }
 
 fn touch(path: &Path) -> std::io::Result<()> {
@@ -44,6 +76,12 @@ fn touch(path: &Path) -> std::io::Result<()> {
 fn main() {
     let home_dir = env::var("HOME").expect("Could not get home directory");
     touch(&Path::new(&home_dir).join(".llmshrc")).expect("Failed to touch ~/.llmshrc");
+    // Initialize the logger
+    WriteLogger::init(
+        LevelFilter::Debug,
+        Config::default(),
+        File::create("my_log.log").unwrap()
+    ).expect("Logger Initialization failed");
 
     // TODO: enhance error handling
     let mut shell = shell::get_shell().expect("$SHELL is not set");
@@ -82,6 +120,12 @@ fn main() {
             // Set terminal to raw mode
             let original_termios = set_raw_mode(&stdin_fd);
 
+            // Get the current terminal size
+            let ws = get_terminal_size(raw_stdin_fd);
+
+            // Set the terminal size of the PTY
+            set_terminal_size(raw_master_fd, &ws);
+
             let mut input_buffer: [u8; 4096] = [0; 4096];
             let mut child_exited = false;
 
@@ -94,9 +138,9 @@ fn main() {
                             let n = read(raw_master_fd, &mut input_buffer);
                             match n {
                                 Ok(n) if n > 0 => {
+                                    log::debug!("{:?}", &input_buffer[..n]);
                                     // std::io::stdout().write_all(&input_buffer[..n]).expect("Failed to write to stdout");
                                     let parsed_output = shell.parse_output(&input_buffer[..n]);
-                                    // println!("hello 1!");
                                     for (_, out) in parsed_output {
                                         // Write data from master PTY to stdout
                                         std::io::stdout().write_all(&out).expect("Failed to write to stdout");

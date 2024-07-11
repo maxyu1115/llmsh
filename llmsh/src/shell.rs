@@ -5,9 +5,11 @@ use std::path::PathBuf;
 use tempfile::NamedTempFile;
 
 use crate::io;
+use crate::io::TransitionCondition::StringID;
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone)]
 pub enum OutputType {
+    InProgress,
     Header,
     Input,
     Output,
@@ -49,9 +51,14 @@ pub fn get_shell() -> Option<Box<dyn ShellParser>> {
 }
 
 
+fn make_string_id(s: &str) -> String {
+    String::from(s.replace("\n", "\r\n"))
+}
+
+
 /*********************************** BASH ***********************************/
 
-const BASH_PROMPT_INPUT_START: &str = "##LLMSH-CMD-START##\n";
+const BASH_PROMPT_INPUT_START: &str = "🦀";
 const BASH_PROMPT_INPUT_END: &str = "##LLMSH-CMD-END##\n";
 const BASH_PROMPT_OUTPUT_END: &str = "##LLMSH-OUT-END##\n";
 
@@ -76,14 +83,14 @@ impl Bash {
                 BashState::Output, // Start with output state, since it instantly transitions to idle
             HashMap::from([
                     (BashState::Idle, vec![
-                        (String::from(BASH_PROMPT_INPUT_START.replace("\n", "\r\n")), BashState::CmdInput),
+                        (StringID(make_string_id(BASH_PROMPT_INPUT_START), true), BashState::CmdInput),
                     ]),
                     (BashState::CmdInput, vec![
-                        (String::from(BASH_PROMPT_INPUT_END.replace("\n", "\r\n")), BashState::Output),
-                        (String::from(BASH_PROMPT_OUTPUT_END.replace("\n", "\r\n")), BashState::Idle),
+                        (StringID(make_string_id(BASH_PROMPT_INPUT_END), false), BashState::Output),
+                        (StringID(make_string_id(BASH_PROMPT_OUTPUT_END), false), BashState::Idle),
                     ]),
                     (BashState::Output, vec![
-                        (String::from(BASH_PROMPT_OUTPUT_END.replace("\n", "\r\n")), BashState::Idle),
+                        (StringID(make_string_id(BASH_PROMPT_OUTPUT_END), false), BashState::Idle),
                     ]),
                 ])
             ),
@@ -103,9 +110,19 @@ impl ShellParser for Bash {
         let _ = temp_rc.write_all(
             &format!("export PS0=\"{}{}\"\n", String::from(BASH_PROMPT_INPUT_END), &orig_ps0).into_bytes()
         );
-        let _ = temp_rc.write_all(
-            &format!("export PS1=\"{}{}{}\"\n", String::from(BASH_PROMPT_OUTPUT_END), &orig_ps1, String::from(BASH_PROMPT_INPUT_START)).into_bytes()
-        );
+
+        // If current ps1 uses $ as the ending, replace with our crab identifier
+        if let Some(_dollar_idx) = orig_ps1.rfind("\\$") {
+            let new_ps1 = replace_last(&orig_ps1, "\\$", BASH_PROMPT_INPUT_START);
+            
+            let _ = temp_rc.write_all(
+                &format!("export PS1=\"{}{}\"\n", String::from(BASH_PROMPT_OUTPUT_END), new_ps1).into_bytes()
+            );
+        } else {
+            let _ = temp_rc.write_all(
+                &format!("export PS1=\"{}{}{}\"\n", String::from(BASH_PROMPT_OUTPUT_END), &orig_ps1, String::from(BASH_PROMPT_INPUT_START)).into_bytes()
+            );
+        }
     }
 
     fn parse_output(&mut self, input: &[u8]) -> Vec<(OutputType, Vec<u8>)> {
@@ -113,14 +130,31 @@ impl ShellParser for Bash {
         self.parser.buffer(input);
         loop {
             match self.parser.step() {
-                None => break,
-                Some((s, out)) => match s {
-                    BashState::Idle => ret.push((OutputType::Header, out)),
-                    BashState::CmdInput => ret.push((OutputType::Input, out)),
-                    BashState::Output => ret.push((OutputType::Output, out)),
+                io::StepResults::Done => break,
+                io::StepResults::Echo(out) => {
+                    ret.push((OutputType::InProgress, out.to_vec()));
+                    break;
+                },
+                io::StepResults::StateChange{state, step, aggregated} => match state {
+                    BashState::Idle => ret.push((OutputType::Header, step)),
+                    BashState::CmdInput => ret.push((OutputType::Input, step)),
+                    BashState::Output => ret.push((OutputType::Output, step)),
                 }
             }
         }
         return ret;
+    }
+}
+
+
+fn replace_last(haystack: &str, needle: &str, replacement: &str) -> String {
+    if let Some(pos) = haystack.rfind(needle) {
+        let mut result = String::with_capacity(haystack.len() - needle.len() + replacement.len());
+        result.push_str(&haystack[..pos]);
+        result.push_str(replacement);
+        result.push_str(&haystack[pos + needle.len()..]);
+        result
+    } else {
+        haystack.to_string() // If the needle is not found, return the original string
     }
 }
