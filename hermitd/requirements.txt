@@ -1,2 +1,4 @@
 pydantic
 pyzmq
+transformers
+vllm
