@@ -21,7 +21,6 @@ pub trait ShellParser {
     fn parse_output(&mut self, input: &[u8]) -> Vec<(OutputType, Vec<u8>)>;
 }
 
-
 // TODO: symlink handling, especially for /bin/sh?
 // fn resolve_symlink(path: PathBuf) -> std::io::Result<PathBuf> {
 //     let mut current_path = path;
@@ -50,11 +49,9 @@ pub fn get_shell() -> Option<Box<dyn ShellParser>> {
     }
 }
 
-
 fn make_string_id(s: &str) -> String {
     String::from(s.replace("\n", "\r\n"))
 }
-
 
 /*********************************** BASH ***********************************/
 
@@ -62,12 +59,11 @@ const BASH_PROMPT_INPUT_START: &str = "🦀";
 const BASH_PROMPT_INPUT_END: &str = "##LLMSH-CMD-END##\n";
 const BASH_PROMPT_OUTPUT_END: &str = "##LLMSH-OUT-END##\n";
 
-
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 enum BashState {
-    Idle, // State starts when ##LLMSH-OUT-END##, ends with ##LLMSH-CMD-START##
+    Idle,     // State starts when ##LLMSH-OUT-END##, ends with ##LLMSH-CMD-START##
     CmdInput, // State starts when ##LLMSH-CMD-START##
-    Output, // State starts when ##LLMSH-CMD-END##, State ends when ##LLMSH-OUT-END##
+    Output,   // State starts when ##LLMSH-CMD-END##, State ends when ##LLMSH-OUT-END##
 }
 
 struct Bash {
@@ -81,18 +77,35 @@ impl Bash {
             shell_name: shell_name,
             parser: io::BufferParser::new(
                 BashState::Output, // Start with output state, since it instantly transitions to idle
-            HashMap::from([
-                    (BashState::Idle, vec![
-                        (StringID(make_string_id(BASH_PROMPT_INPUT_START), true), BashState::CmdInput),
-                    ]),
-                    (BashState::CmdInput, vec![
-                        (StringID(make_string_id(BASH_PROMPT_INPUT_END), false), BashState::Output),
-                        (StringID(make_string_id(BASH_PROMPT_OUTPUT_END), false), BashState::Idle),
-                    ]),
-                    (BashState::Output, vec![
-                        (StringID(make_string_id(BASH_PROMPT_OUTPUT_END), false), BashState::Idle),
-                    ]),
-                ])
+                HashMap::from([
+                    (
+                        BashState::Idle,
+                        vec![(
+                            StringID(make_string_id(BASH_PROMPT_INPUT_START), true),
+                            BashState::CmdInput,
+                        )],
+                    ),
+                    (
+                        BashState::CmdInput,
+                        vec![
+                            (
+                                StringID(make_string_id(BASH_PROMPT_INPUT_END), false),
+                                BashState::Output,
+                            ),
+                            (
+                                StringID(make_string_id(BASH_PROMPT_OUTPUT_END), false),
+                                BashState::Idle,
+                            ),
+                        ],
+                    ),
+                    (
+                        BashState::Output,
+                        vec![(
+                            StringID(make_string_id(BASH_PROMPT_OUTPUT_END), false),
+                            BashState::Idle,
+                        )],
+                    ),
+                ]),
             ),
         };
     }
@@ -108,19 +121,35 @@ impl ShellParser for Bash {
         let orig_ps0 = env::var("PS0").unwrap_or_else(|_| String::from(""));
         let orig_ps1 = env::var("PS1").unwrap_or_else(|_| String::from(""));
         let _ = temp_rc.write_all(
-            &format!("export PS0=\"{}{}\"\n", String::from(BASH_PROMPT_INPUT_END), &orig_ps0).into_bytes()
+            &format!(
+                "export PS0=\"{}{}\"\n",
+                String::from(BASH_PROMPT_INPUT_END),
+                &orig_ps0
+            )
+            .into_bytes(),
         );
 
         // If current ps1 uses $ as the ending, replace with our crab identifier
         if let Some(_dollar_idx) = orig_ps1.rfind("\\$") {
             let new_ps1 = replace_last(&orig_ps1, "\\$", BASH_PROMPT_INPUT_START);
-            
+
             let _ = temp_rc.write_all(
-                &format!("export PS1=\"{}{}\"\n", String::from(BASH_PROMPT_OUTPUT_END), new_ps1).into_bytes()
+                &format!(
+                    "export PS1=\"{}{}\"\n",
+                    String::from(BASH_PROMPT_OUTPUT_END),
+                    new_ps1
+                )
+                .into_bytes(),
             );
         } else {
             let _ = temp_rc.write_all(
-                &format!("export PS1=\"{}{}{}\"\n", String::from(BASH_PROMPT_OUTPUT_END), &orig_ps1, String::from(BASH_PROMPT_INPUT_START)).into_bytes()
+                &format!(
+                    "export PS1=\"{}{}{}\"\n",
+                    String::from(BASH_PROMPT_OUTPUT_END),
+                    &orig_ps1,
+                    String::from(BASH_PROMPT_INPUT_START)
+                )
+                .into_bytes(),
             );
         }
     }
@@ -134,18 +163,21 @@ impl ShellParser for Bash {
                 io::StepResults::Echo(out) => {
                     ret.push((OutputType::InProgress, out.to_vec()));
                     break;
-                },
-                io::StepResults::StateChange{state, step, aggregated} => match state {
+                }
+                io::StepResults::StateChange {
+                    state,
+                    step,
+                    aggregated,
+                } => match state {
                     BashState::Idle => ret.push((OutputType::Header, step)),
                     BashState::CmdInput => ret.push((OutputType::Input, step)),
                     BashState::Output => ret.push((OutputType::Output, step)),
-                }
+                },
             }
         }
         return ret;
     }
 }
-
 
 fn replace_last(haystack: &str, needle: &str, replacement: &str) -> String {
     if let Some(pos) = haystack.rfind(needle) {

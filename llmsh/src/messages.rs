@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type")]
 enum Request {
     GenerateCommand {
-        prompt: String
+        prompt: String,
     },
     SaveContext {
         command: String,
@@ -16,11 +16,6 @@ enum Request {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type")]
 enum Response {
-    CommandResponse {
-        status: String,
-        command: String,
-    },
-    Error {
-        status: String
-    },
+    CommandResponse { status: String, command: String },
+    Error { status: String },
 }
