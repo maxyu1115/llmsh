@@ -1,8 +1,9 @@
+use log::debug;
 use std::collections::HashMap;
 use std::env;
+use std::ffi::CString;
 use std::io::Write;
 use std::path::PathBuf;
-use log::debug;
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
@@ -18,6 +19,7 @@ pub enum OutputType {
 }
 
 pub trait ShellParser {
+    fn get_path(&self) -> CString;
     fn get_rcfile(&self) -> String;
     fn inject_markers(&self, temp_rc: &NamedTempFile);
     fn parse_output(&mut self, input: &[u8]) -> Vec<(OutputType, Vec<u8>)>;
@@ -38,13 +40,13 @@ pub trait ShellParser {
 
 pub fn get_shell() -> Option<Box<dyn ShellParser>> {
     let shell_pathname: String = env::var("SHELL").expect("$SHELL is not set");
-    if let Some(file_name) = PathBuf::from(shell_pathname).file_name() {
+    if let Some(file_name) = PathBuf::from(&shell_pathname).file_name() {
         let file_name_str = file_name.to_string_lossy();
         match file_name_str.as_ref() {
-            "bash" => return Some(Box::new(Bash::new("bash".to_string()))),
-            "zsh" => return Some(Box::new(Bash::new("zsh".to_string()))),
+            "bash" => return Some(Box::new(Bash::new(shell_pathname, "bash".to_string()))),
+            "zsh" => return Some(Box::new(Bash::new(shell_pathname, "zsh".to_string()))),
             "csh" => todo!(),
-            other => return Some(Box::new(Bash::new(other.to_string()))),
+            other => return Some(Box::new(Bash::new(shell_pathname, other.to_string()))),
         }
     } else {
         return None;
@@ -68,20 +70,25 @@ enum BashState {
 
 struct Bash {
     shell_name: String,
+    shell_path: String,
     parser: io::BufferParser<BashState>,
     input_end_marker: String,
     output_end_marker: String,
 }
 
 impl Bash {
-    fn new(shell_name: String) -> Bash {
+    fn new(shell_pathname: String, shell_name: String) -> Bash {
         let input_end_marker: String = Uuid::new_v4().to_string() + "\n";
         let output_end_marker: String = Uuid::new_v4().to_string() + "\n";
 
-        debug!("Bash Input End Marker: [{}], Output End Marker: [{}]", input_end_marker, output_end_marker);
+        debug!(
+            "Bash Input End Marker: [{}], Output End Marker: [{}]",
+            input_end_marker, output_end_marker
+        );
 
         return Bash {
             shell_name: shell_name,
+            shell_path: shell_pathname,
             parser: io::BufferParser::new(
                 BashState::Output, // Start with output state, since it instantly transitions to idle
                 HashMap::from([
@@ -121,6 +128,10 @@ impl Bash {
 }
 
 impl ShellParser for Bash {
+    fn get_path(&self) -> CString {
+        return CString::new(self.shell_path.clone()).unwrap();
+    }
+
     fn get_rcfile(&self) -> String {
         return format!("~/.{}rc", self.shell_name);
     }

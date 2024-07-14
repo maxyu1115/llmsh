@@ -1,10 +1,4 @@
 use log;
-use mio::unix::SourceFd;
-use mio::{Events, Interest, Poll, Token};
-use nix::fcntl::{fcntl, open, FcntlArg, OFlag};
-use nix::libc::{ioctl, winsize, TIOCGWINSZ, TIOCSWINSZ};
-use nix::pty::*;
-use nix::sys::termios::{self, SetArg, Termios};
 use nix::sys::wait::*;
 use nix::unistd::*;
 use simplelog::*;
@@ -12,60 +6,14 @@ use std::env;
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::os::fd::AsFd;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use tempfile::NamedTempFile;
 
 mod io;
 mod messages;
+mod pty;
 mod shell;
-
-const MASTER: Token = Token(0);
-const STDIN: Token = Token(1);
-
-fn set_raw_mode<Fd: AsFd>(fd: &Fd) -> Termios {
-    let original_termios = termios::tcgetattr(fd).expect("Failed to get terminal attributes");
-    let mut raw_termios = original_termios.clone();
-    // raw_termios.input_flags &= !(InputFlags::ICRNL | InputFlags::IXON | InputFlags::BRKINT | InputFlags::INPCK | InputFlags::ISTRIP | InputFlags::IXANY);
-    // raw_termios.output_flags &= !termios::OutputFlags::OPOST;
-    // raw_termios.control_flags |= termios::ControlFlags::CS8;
-    // raw_termios.local_flags &= !(LocalFlags::ECHO | LocalFlags::ICANON | LocalFlags::ISIG);
-    termios::cfmakeraw(&mut raw_termios);
-    termios::tcsetattr(fd, SetArg::TCSANOW, &raw_termios)
-        .expect("Failed to set terminal to raw mode");
-    original_termios
-}
-
-fn restore_terminal<Fd: AsFd>(fd: Fd, termios: &Termios) {
-    termios::tcsetattr(fd, SetArg::TCSANOW, termios)
-        .expect("Failed to restore terminal attributes");
-}
-
-// Function to get the terminal window size
-fn get_terminal_size(fd: i32) -> winsize {
-    let mut ws: winsize = winsize {
-        ws_row: 0,
-        ws_col: 0,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    unsafe {
-        if ioctl(fd, TIOCGWINSZ, &mut ws) == -1 {
-            panic!("Failed to get terminal window size");
-        }
-    }
-    return ws;
-}
-
-// Function to set the terminal window size
-fn set_terminal_size(fd: i32, ws: &winsize) {
-    unsafe {
-        if ioctl(fd, TIOCSWINSZ, ws) == -1 {
-            panic!("Failed to set terminal window size");
-        }
-    }
-}
 
 fn touch(path: &Path) -> std::io::Result<()> {
     match OpenOptions::new().create(true).write(true).open(path) {
@@ -92,52 +40,20 @@ fn main() {
     // TODO: enhance error handling
     let mut shell = shell::get_shell().expect("$SHELL is not set");
 
-    // Open a new PTY master and get the file descriptor
-    let master_fd =
-        posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY).expect("Failed to open PTY master");
-
-    // Grant access to the slave PTY
-    grantpt(&master_fd).expect("Failed to grant PTY access");
-
-    // Unlock the slave PTY
-    unlockpt(&master_fd).expect("Failed to unlock PTY");
-
-    // Get the name of the slave PTY
-    // FIXME: ptsname_r does not work on windows/mac
-    let slave_name = ptsname_r(&master_fd).expect("Failed to get slave PTY name");
+    // Open a new PTY parent and get the file descriptor
+    let (parent_fd, child_name) = pty::open_pty();
 
     // Fork the process
     match unsafe { fork().expect("Failed to fork process") } {
         ForkResult::Parent { child } => {
-            // Parent process: Set up non-blocking I/O and polling
-            let mut poll = Poll::new().expect("Failed to create Poll instance");
-            let mut events = Events::with_capacity(1024);
-
-            let raw_master_fd = master_fd.as_raw_fd();
             let stdin_fd = std::io::stdin();
+            let raw_parent_fd = parent_fd.as_raw_fd();
             let raw_stdin_fd = stdin_fd.as_raw_fd();
 
-            fcntl(raw_master_fd, FcntlArg::F_SETFL(OFlag::O_NONBLOCK))
-                .expect("Failed to set non-blocking");
-            fcntl(raw_stdin_fd, FcntlArg::F_SETFL(OFlag::O_NONBLOCK))
-                .expect("Failed to set non-blocking");
-
-            // Register the master PTY and stdin file descriptors with the poll instance
-            poll.registry()
-                .register(&mut SourceFd(&raw_master_fd), MASTER, Interest::READABLE)
-                .expect("Failed to register master_fd");
-            poll.registry()
-                .register(&mut SourceFd(&raw_stdin_fd), STDIN, Interest::READABLE)
-                .expect("Failed to register stdin_fd");
+            let (mut poll, mut events) = pty::setup_parent_pty(&parent_fd, &stdin_fd);
 
             // Set terminal to raw mode
-            let original_termios = set_raw_mode(&stdin_fd);
-
-            // Get the current terminal size
-            let ws = get_terminal_size(raw_stdin_fd);
-
-            // Set the terminal size of the PTY
-            set_terminal_size(raw_master_fd, &ws);
+            let original_termios = pty::set_raw_mode(&stdin_fd);
 
             let mut input_buffer: [u8; 4096] = [0; 4096];
             let mut child_exited = false;
@@ -147,15 +63,14 @@ fn main() {
 
                 for event in events.iter() {
                     match event.token() {
-                        MASTER => {
-                            let n = read(raw_master_fd, &mut input_buffer);
+                        pty::PARENT_TOK => {
+                            let n = read(raw_parent_fd, &mut input_buffer);
                             match n {
                                 Ok(n) if n > 0 => {
                                     log::debug!("{:?}", &input_buffer[..n]);
-                                    // std::io::stdout().write_all(&input_buffer[..n]).expect("Failed to write to stdout");
                                     let parsed_output = shell.parse_output(&input_buffer[..n]);
                                     for (_, out) in parsed_output {
-                                        // Write data from master PTY to stdout
+                                        // Write data from parent PTY to stdout
                                         std::io::stdout()
                                             .write_all(&out)
                                             .expect("Failed to write to stdout");
@@ -168,16 +83,16 @@ fn main() {
                                     child_exited = true;
                                     break;
                                 }
-                                Err(e) => panic!("Failed to read from master_fd: {}", e),
+                                Err(e) => panic!("Failed to read from parent_fd: {}", e),
                             }
                         }
-                        STDIN => {
+                        pty::STDIN_TOK => {
                             let n = read(raw_stdin_fd, &mut input_buffer);
                             match n {
                                 Ok(n) if n > 0 => {
-                                    // Write data from stdin to master PTY
-                                    write(&master_fd, &input_buffer[..n])
-                                        .expect("Failed to write to master_fd");
+                                    // Write data from stdin to parent PTY
+                                    write(&parent_fd, &input_buffer[..n])
+                                        .expect("Failed to write to parent_fd");
                                 }
                                 Ok(_) => {}
                                 Err(e) => panic!("Failed to read from stdin: {}", e),
@@ -197,30 +112,14 @@ fn main() {
             }
 
             // Restore terminal to original state
-            restore_terminal(stdin_fd, &original_termios);
+            pty::restore_terminal(stdin_fd, &original_termios);
         }
         ForkResult::Child => {
-            // Child process: Start a new session and set the slave PTY as the controlling terminal
-            setsid().expect("Failed to create new session");
-
-            let slave_fd = open(
-                slave_name.as_str(),
-                OFlag::O_RDWR,
-                nix::sys::stat::Mode::empty(),
-            )
-            .expect("Failed to open slave PTY");
-
-            // Set the slave PTY as stdin, stdout, and stderr
-            dup2(slave_fd, 0).expect("Failed to duplicate slave PTY to stdin");
-            dup2(slave_fd, 1).expect("Failed to duplicate slave PTY to stdout");
-            dup2(slave_fd, 2).expect("Failed to duplicate slave PTY to stderr");
-
-            // Close the slave PTY file descriptor
-            close(slave_fd).expect("Failed to close slave PTY file descriptor");
+            // setup the child pty to properly redirect everything to the parent
+            pty::setup_child_pty(child_name);
 
             // TODO: use /bin/sh when no SHELL set
-            let shell_path: String = env::var("SHELL").expect("$SHELL is not set");
-            let shell_path: CString = CString::new(shell_path).unwrap();
+            let shell_path: CString = shell.get_path();
 
             // Collect the current environment variables
             let env_vars: Vec<CString> = env::vars()
