@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
+use log::debug;
 use tempfile::NamedTempFile;
+use uuid::Uuid;
 
 use crate::io;
 use crate::io::TransitionCondition::StringID;
@@ -55,9 +57,7 @@ fn make_string_id(s: &str) -> String {
 
 /*********************************** BASH ***********************************/
 
-const BASH_PROMPT_INPUT_START: &str = "🦀";
-const BASH_PROMPT_INPUT_END: &str = "##LLMSH-CMD-END##\n";
-const BASH_PROMPT_OUTPUT_END: &str = "##LLMSH-OUT-END##\n";
+const BASH_PROMPT_INPUT_START: &str = "🐚";
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 enum BashState {
@@ -69,10 +69,17 @@ enum BashState {
 struct Bash {
     shell_name: String,
     parser: io::BufferParser<BashState>,
+    input_end_marker: String,
+    output_end_marker: String,
 }
 
 impl Bash {
     fn new(shell_name: String) -> Bash {
+        let input_end_marker: String = Uuid::new_v4().to_string() + "\n";
+        let output_end_marker: String = Uuid::new_v4().to_string() + "\n";
+
+        debug!("Bash Input End Marker: [{}], Output End Marker: [{}]", input_end_marker, output_end_marker);
+
         return Bash {
             shell_name: shell_name,
             parser: io::BufferParser::new(
@@ -89,11 +96,11 @@ impl Bash {
                         BashState::CmdInput,
                         vec![
                             (
-                                StringID(make_string_id(BASH_PROMPT_INPUT_END), false),
+                                StringID(make_string_id(&input_end_marker), false),
                                 BashState::Output,
                             ),
                             (
-                                StringID(make_string_id(BASH_PROMPT_OUTPUT_END), false),
+                                StringID(make_string_id(&output_end_marker), false),
                                 BashState::Idle,
                             ),
                         ],
@@ -101,12 +108,14 @@ impl Bash {
                     (
                         BashState::Output,
                         vec![(
-                            StringID(make_string_id(BASH_PROMPT_OUTPUT_END), false),
+                            StringID(make_string_id(&output_end_marker), false),
                             BashState::Idle,
                         )],
                     ),
                 ]),
             ),
+            input_end_marker: input_end_marker,
+            output_end_marker: output_end_marker,
         };
     }
 }
@@ -121,12 +130,7 @@ impl ShellParser for Bash {
         let orig_ps0 = env::var("PS0").unwrap_or_else(|_| String::from(""));
         let orig_ps1 = env::var("PS1").unwrap_or_else(|_| String::from(""));
         let _ = temp_rc.write_all(
-            &format!(
-                "export PS0=\"{}{}\"\n",
-                String::from(BASH_PROMPT_INPUT_END),
-                &orig_ps0
-            )
-            .into_bytes(),
+            &format!("export PS0=\"{}{}\"\n", self.input_end_marker, &orig_ps0).into_bytes(),
         );
 
         // If current ps1 uses $ as the ending, replace with our crab identifier
@@ -134,18 +138,13 @@ impl ShellParser for Bash {
             let new_ps1 = replace_last(&orig_ps1, "\\$", BASH_PROMPT_INPUT_START);
 
             let _ = temp_rc.write_all(
-                &format!(
-                    "export PS1=\"{}{}\"\n",
-                    String::from(BASH_PROMPT_OUTPUT_END),
-                    new_ps1
-                )
-                .into_bytes(),
+                &format!("export PS1=\"{}{}\"\n", self.output_end_marker, new_ps1).into_bytes(),
             );
         } else {
             let _ = temp_rc.write_all(
                 &format!(
                     "export PS1=\"{}{}{}\"\n",
-                    String::from(BASH_PROMPT_OUTPUT_END),
+                    self.output_end_marker,
                     &orig_ps1,
                     String::from(BASH_PROMPT_INPUT_START)
                 )

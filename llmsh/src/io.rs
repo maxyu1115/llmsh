@@ -13,6 +13,7 @@ pub enum StepResults<'a, S> {
 }
 
 pub enum TransitionCondition {
+    // identifier, visible
     StringID(String, bool),
 }
 
