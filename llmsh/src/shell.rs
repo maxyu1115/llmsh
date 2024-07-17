@@ -1,4 +1,5 @@
 use log::debug;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::ffi::CString;
@@ -10,19 +11,30 @@ use uuid::Uuid;
 use crate::io;
 use crate::io::TransitionCondition::StringID;
 
-#[derive(Copy, Clone)]
-pub enum OutputType {
-    InProgress,
+#[derive(Copy, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ShellOutputType {
     Header,
     Input,
+    InputAborted,
     Output,
+}
+
+pub enum ParsedOutput {
+    // InProgress(&'a [u8]),
+    InProgress(Vec<u8>),
+    Output {
+        output_type: ShellOutputType,
+        step: Vec<u8>,
+        aggregated: Vec<u8>,
+    },
 }
 
 pub trait ShellParser {
     fn get_path(&self) -> CString;
     fn get_rcfile(&self) -> String;
     fn inject_markers(&self, temp_rc: &NamedTempFile);
-    fn parse_output(&mut self, input: &[u8]) -> Vec<(OutputType, Vec<u8>)>;
+    fn parse_output(&mut self, input: &[u8]) -> Vec<ParsedOutput>;
 }
 
 // TODO: symlink handling, especially for /bin/sh?
@@ -71,7 +83,7 @@ enum BashState {
 struct Bash {
     shell_name: String,
     shell_path: String,
-    parser: io::BufferParser<BashState>,
+    parser: io::BufferParser<BashState, ShellOutputType>,
     input_end_marker: String,
     output_end_marker: String,
 }
@@ -95,28 +107,36 @@ impl Bash {
                     (
                         BashState::Idle,
                         vec![(
+                            // transition from end of output to pending new input
                             StringID(make_string_id(BASH_PROMPT_INPUT_START), true),
                             BashState::CmdInput,
+                            ShellOutputType::Header,
                         )],
                     ),
                     (
                         BashState::CmdInput,
                         vec![
                             (
+                                // Recieved proper user cmd
                                 StringID(make_string_id(&input_end_marker), false),
                                 BashState::Output,
+                                ShellOutputType::Input,
                             ),
                             (
+                                // User aborted cmd input (control+c or empty enter)
                                 StringID(make_string_id(&output_end_marker), false),
                                 BashState::Idle,
+                                ShellOutputType::InputAborted,
                             ),
                         ],
                     ),
                     (
                         BashState::Output,
                         vec![(
+                            // Recieved proper user cmd
                             StringID(make_string_id(&output_end_marker), false),
                             BashState::Idle,
+                            ShellOutputType::Output,
                         )],
                     ),
                 ]),
@@ -164,25 +184,27 @@ impl ShellParser for Bash {
         }
     }
 
-    fn parse_output(&mut self, input: &[u8]) -> Vec<(OutputType, Vec<u8>)> {
+    fn parse_output(&mut self, input: &[u8]) -> Vec<ParsedOutput> {
         let mut ret = Vec::new();
         self.parser.buffer(input);
         loop {
             match self.parser.step() {
                 io::StepResults::Done => break,
                 io::StepResults::Echo(out) => {
-                    ret.push((OutputType::InProgress, out.to_vec()));
+                    ret.push(ParsedOutput::InProgress(out.to_vec()));
                     break;
                 }
                 io::StepResults::StateChange {
-                    state,
+                    event,
                     step,
                     aggregated,
-                } => match state {
-                    BashState::Idle => ret.push((OutputType::Header, step)),
-                    BashState::CmdInput => ret.push((OutputType::Input, step)),
-                    BashState::Output => ret.push((OutputType::Output, step)),
-                },
+                } => {
+                    ret.push(ParsedOutput::Output {
+                        output_type: event,
+                        step,
+                        aggregated,
+                    });
+                }
             }
         }
         return ret;

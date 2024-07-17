@@ -46,6 +46,14 @@ fn main() {
     // Fork the process
     match unsafe { fork().expect("Failed to fork process") } {
         ForkResult::Parent { child } => {
+            let client = match messages::HermitdClient::init_client() {
+                Ok(client) => client,
+                Err(error_msg) => {
+                    log::error!("init_client failed with: {}", error_msg);
+                    panic!()
+                }
+            };
+
             let stdin_fd = std::io::stdin();
             let raw_parent_fd = parent_fd.as_raw_fd();
             let raw_stdin_fd = stdin_fd.as_raw_fd();
@@ -58,6 +66,7 @@ fn main() {
             let mut input_buffer: [u8; 4096] = [0; 4096];
             let mut child_exited = false;
 
+            // TODO: clean up error handling
             loop {
                 poll.poll(&mut events, None).expect("Failed to poll events");
 
@@ -68,12 +77,42 @@ fn main() {
                             match n {
                                 Ok(n) if n > 0 => {
                                     log::debug!("{:?}", &input_buffer[..n]);
-                                    let parsed_output = shell.parse_output(&input_buffer[..n]);
-                                    for (_, out) in parsed_output {
-                                        // Write data from parent PTY to stdout
-                                        std::io::stdout()
-                                            .write_all(&out)
-                                            .expect("Failed to write to stdout");
+                                    let parsed_outputs = shell.parse_output(&input_buffer[..n]);
+                                    for out in parsed_outputs {
+                                        match out {
+                                            shell::ParsedOutput::InProgress(s) => {
+                                                // Write data from parent PTY to stdout
+                                                std::io::stdout()
+                                                    .write_all(&s)
+                                                    .expect("Failed to write to stdout");
+                                            }
+                                            shell::ParsedOutput::Output {
+                                                output_type,
+                                                step,
+                                                aggregated,
+                                            } => {
+                                                std::io::stdout()
+                                                    .write_all(&step)
+                                                    .expect("Failed to write to stdout");
+                                                match output_type {
+                                                    shell::ShellOutputType::Input => {}
+                                                    shell::ShellOutputType::Header => {}
+                                                    _ => {
+                                                        let context =
+                                                            String::from_utf8(aggregated).unwrap();
+                                                        match client
+                                                            .save_context(output_type, context)
+                                                        {
+                                                            Ok(_) => {}
+                                                            Err(err) => {
+                                                                log::error!("Failed to write to hermitd: {}", err);
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                };
+                                            }
+                                        }
                                     }
                                     std::io::stdout().flush().expect("Failed to flush stdout");
                                 }

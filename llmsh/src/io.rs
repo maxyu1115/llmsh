@@ -2,10 +2,10 @@ use log;
 use std::collections::HashMap;
 use std::hash::Hash;
 
-pub enum StepResults<'a, S> {
+pub enum StepResults<'a, E> {
     Echo(&'a [u8]),
     StateChange {
-        state: S,
+        event: E,
         step: Vec<u8>,
         aggregated: Vec<u8>,
     },
@@ -17,7 +17,7 @@ pub enum TransitionCondition {
     StringID(String, bool),
 }
 
-pub struct BufferParser<S: Copy + PartialEq + Eq + Hash> {
+pub struct BufferParser<S: Copy + PartialEq + Eq + Hash, E: Copy> {
     // buffer storing all the buffered input
     input_buffer: Vec<u8>,
     // how much of the buffer is parsed already
@@ -25,17 +25,20 @@ pub struct BufferParser<S: Copy + PartialEq + Eq + Hash> {
     // current state
     state: S,
 
-    // state -> (transition_condition, next_state)
-    state_map: HashMap<S, Vec<(TransitionCondition, S)>>,
+    // state -> (transition_condition, next_state, emitted_event)
+    state_map: HashMap<S, Vec<(TransitionCondition, S, E)>>,
 }
 
-impl<S: Copy + PartialEq + Eq + Hash> BufferParser<S> {
-    pub fn new(state: S, state_map: HashMap<S, Vec<(TransitionCondition, S)>>) -> BufferParser<S> {
+impl<S: Copy + PartialEq + Eq + Hash, E: Copy> BufferParser<S, E> {
+    pub fn new(
+        state: S,
+        state_map: HashMap<S, Vec<(TransitionCondition, S, E)>>,
+    ) -> BufferParser<S, E> {
         return BufferParser {
             input_buffer: Vec::with_capacity(4096),
             parsed_length: 0,
-            state: state,
-            state_map: state_map,
+            state,
+            state_map,
         };
     }
 
@@ -43,11 +46,11 @@ impl<S: Copy + PartialEq + Eq + Hash> BufferParser<S> {
         self.input_buffer.extend_from_slice(input);
     }
 
-    pub fn step(&mut self) -> StepResults<S> {
+    pub fn step(&mut self) -> StepResults<E> {
         if self.input_buffer.is_empty() {
             return StepResults::Done;
         }
-        for (condition, state) in &self.state_map[&self.state] {
+        for (condition, state, event) in &self.state_map[&self.state] {
             match condition {
                 TransitionCondition::StringID(identifier, visible) => {
                     // start at parsed_length - identifier_length to deal with wrap around cases
@@ -79,7 +82,7 @@ impl<S: Copy + PartialEq + Eq + Hash> BufferParser<S> {
                         self.parsed_length = 0;
                         self.state = *state;
                         return StepResults::StateChange {
-                            state: *state,
+                            event: *event,
                             step,
                             aggregated,
                         };
