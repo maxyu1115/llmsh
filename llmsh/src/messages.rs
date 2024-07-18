@@ -45,7 +45,7 @@ impl HermitdClient {
         let socket = context.socket(zmq::REQ).unwrap();
         socket
             .connect(HERMITD_ENDPOINT)
-            .expect("Failed to connect to hermitd, please ensure hermitd is running");
+            .expect("Failed to connect to hermitd ipc endpoint [/tmp/hermitd-ipc], please check your file system permissions");
 
         let session_id = HermitdClient::setup_session(&socket)?;
 

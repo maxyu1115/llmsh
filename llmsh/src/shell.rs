@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::io;
 use crate::io::TransitionCondition::StringID;
+use crate::map_err;
 
 #[derive(Copy, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -50,18 +51,18 @@ pub trait ShellParser {
 //     Ok(current_path)
 // }
 
-pub fn get_shell() -> Option<Box<dyn ShellParser>> {
-    let shell_pathname: String = env::var("SHELL").expect("$SHELL is not set");
+pub fn get_shell() -> Result<Box<dyn ShellParser>, String> {
+    let shell_pathname: String = map_err!(env::var("SHELL"), "$SHELL is not set")?;
     if let Some(file_name) = PathBuf::from(&shell_pathname).file_name() {
         let file_name_str = file_name.to_string_lossy();
         match file_name_str.as_ref() {
-            "bash" => return Some(Box::new(Bash::new(shell_pathname, "bash".to_string()))),
-            "zsh" => return Some(Box::new(Bash::new(shell_pathname, "zsh".to_string()))),
+            "bash" => return Ok(Box::new(Bash::new(shell_pathname, "bash".to_string()))),
+            "zsh" => return Ok(Box::new(Bash::new(shell_pathname, "zsh".to_string()))),
             "csh" => todo!(),
-            other => return Some(Box::new(Bash::new(shell_pathname, other.to_string()))),
+            other => return Ok(Box::new(Bash::new(shell_pathname, other.to_string()))),
         }
     } else {
-        return None;
+        return Err("the SHELL path terminates in '..'".to_string());
     }
 }
 
