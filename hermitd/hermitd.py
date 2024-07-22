@@ -30,13 +30,14 @@ def main():
         
         if message_type == "GenerateCommand":
             msg = messages.GenerateCommand(**data)
-            reply = messages.Success(type="Success")
+            reply = bot.generateCommand(msg)
         elif message_type == "SaveContext":
             msg = messages.SaveContext(**data)
             bot.saveContext(msg)
             reply = messages.Success(type="Success")
         elif message_type == "Setup":
             msg = messages.Setup(**data)
+            bot.setUp(msg)
             reply = messages.SetupSuccess(type="SetupSuccess", session_id=0)
         else:
             reply = messages.Error(status="Illegal message type")

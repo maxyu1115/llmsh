@@ -57,12 +57,14 @@ class Bot:
     spec: Setup
     history: History
     
-    def __init__(self, spec: Setup):
+    def __init__(self) -> None:
         self.llm = Llama3()
+        
+    def setUp(self, spec: Setup):
         self.history = History(spec.session_id)
         self.spec = spec
         
-    def handle(self, request: GenerateCommand) -> ResponseMessage:
+    def generateCommand(self, request: GenerateCommand) -> ResponseMessage:
         prompt = "Generate a bash command to solve the issue: "
         command = self.llm.generate(request.input, prompt)
         return ResponseMessage(
