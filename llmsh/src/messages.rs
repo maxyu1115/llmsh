@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use zmq;
 
-use crate::map_err;
 use crate::shell;
 use crate::util;
+use crate::{illegal_state, map_err};
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -24,11 +24,11 @@ enum Request {
     },
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
 enum Response {
     SetupSuccess { session_id: u32 },
-    CommandResponse { status: String, command: String },
+    CommandResponse { command: String },
     Error { status: String },
     // generic success message, used for apis we only care about success vs failure
     Success,
@@ -51,9 +51,9 @@ impl HermitdClient {
         let socket = map_err!(context.socket(zmq::REQ), "Failed to create zmq socket")?;
         // Set linger so we can close
         map_err!(socket.set_linger(1000), "Failed to set zmq_linger")?;
-        socket
-            .connect(HERMITD_ENDPOINT)
-            .expect("Failed to connect to hermitd ipc endpoint [/tmp/hermitd-ipc], please check your file system permissions");
+        map_err!(socket
+            .connect(HERMITD_ENDPOINT),
+            "Failed to connect to hermitd ipc endpoint [/tmp/hermitd-ipc], please check your file system permissions")?;
 
         let session_id = HermitdClient::setup_session(&socket)?;
 
@@ -87,8 +87,9 @@ impl HermitdClient {
         return match resp_str.as_str() {
             ALIVE_RESP => Ok(()),
             BUSY_RESP => Err(util::Error::HermitBusy),
-            _ => Err(util::Error::Failed(
-                "Illegal State Exception, received unsupported message from hermitd".to_string(),
+            other => illegal_state!(format!(
+                "Illegal State: Unexpected Response Message Type {:?}",
+                other
             )),
         };
     }
@@ -119,7 +120,10 @@ impl HermitdClient {
                 "Hermitd returned error with status {}",
                 status
             ))),
-            _ => panic!("Illegal State: Unexpected Response Message Type"),
+            other => illegal_state!(format!(
+                "Illegal State: Unexpected Response Message Type {:?}",
+                other
+            )),
         }
     }
 
@@ -139,7 +143,30 @@ impl HermitdClient {
             Response::Error { status } => {
                 return Err(util::Error::HermitFailed(status));
             }
-            _ => panic!("Illegal State: Unexpected Response Message Type"),
+            other => illegal_state!(format!(
+                "Illegal State: Unexpected Response Message Type {:?}",
+                other
+            )),
+        }
+    }
+
+    pub fn generate_command(&self, prompt: String) -> Result<String, util::Error> {
+        let gen_request = Request::GenerateCommand {
+            session_id: self.session_id,
+            prompt,
+        };
+        let reply = HermitdClient::send_msg(&self.socket, gen_request, 10000)?;
+        match reply {
+            Response::CommandResponse { command } => {
+                return Ok(command);
+            }
+            Response::Error { status } => {
+                return Err(util::Error::HermitFailed(status));
+            }
+            other => illegal_state!(format!(
+                "Illegal State: Unexpected Response Message Type {:?}",
+                other
+            )),
         }
     }
 }

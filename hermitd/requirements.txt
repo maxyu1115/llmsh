@@ -2,3 +2,6 @@ pydantic
 pyzmq
 transformers
 vllm
+
+# development
+black

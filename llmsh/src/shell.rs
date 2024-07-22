@@ -8,9 +8,9 @@ use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
-use crate::io;
-use crate::io::TransitionCondition::StringID;
 use crate::map_err;
+use crate::parsing;
+use crate::parsing::TransitionCondition::StringID;
 use crate::util;
 
 #[derive(Copy, Clone, Serialize, Deserialize)]
@@ -87,7 +87,7 @@ enum BashState {
 struct Bash {
     shell_name: String,
     shell_path: String,
-    parser: io::BufferParser<BashState, ShellOutputType>,
+    parser: parsing::BufferParser<BashState, ShellOutputType>,
     input_end_marker: String,
     output_end_marker: String,
 }
@@ -105,7 +105,7 @@ impl Bash {
         return Bash {
             shell_name: shell_name,
             shell_path: shell_pathname,
-            parser: io::BufferParser::new(
+            parser: parsing::BufferParser::new(
                 BashState::Output, // Start with output state, since it instantly transitions to idle
                 HashMap::from([
                     (
@@ -193,12 +193,12 @@ impl ShellParser for Bash {
         self.parser.buffer(input);
         loop {
             match self.parser.step() {
-                io::StepResults::Done => break,
-                io::StepResults::Echo(out) => {
+                parsing::StepResults::Done => break,
+                parsing::StepResults::Echo(out) => {
                     ret.push(ParsedOutput::InProgress(out.to_vec()));
                     break;
                 }
-                io::StepResults::StateChange {
+                parsing::StepResults::StateChange {
                     event,
                     step,
                     aggregated,

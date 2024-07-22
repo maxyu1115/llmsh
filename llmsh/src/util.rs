@@ -7,18 +7,20 @@ pub enum Error {
     HermitFailed(String),
     HermitBusy,
     HermitDead,
+    IllegalState(String),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::Failed(s) => write!(fmt, "{}", s),
+            Error::Failed(msg) => write!(fmt, "{}", msg),
             Error::HermitBusy => write!(fmt, "hermitd is Busy"),
             Error::HermitDead => write!(
                 fmt,
                 "hermitd is unresponsive. Please check if you have hermitd started"
             ),
-            Error::HermitFailed(s) => write!(fmt, "hermitd failed with error: {}", s),
+            Error::HermitFailed(msg) => write!(fmt, "hermitd failed with error: {}", msg),
+            Error::IllegalState(msg) => write!(fmt, "Illegal State Exception: {}", msg),
         }
     }
 }
@@ -29,6 +31,14 @@ impl fmt::Debug for Error {
     }
 }
 
+#[macro_export]
+macro_rules! illegal_state {
+    ($msg:expr) => {{
+        log::error!("Illegal State Exception: {}", $msg);
+        log::debug!("Backtrace: {:?}", std::backtrace::Backtrace::capture());
+        return Err(util::Error::IllegalState($msg.to_string()));
+    }};
+}
 
 #[macro_export]
 macro_rules! map_err {

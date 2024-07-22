@@ -15,8 +15,8 @@ use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use tempfile::NamedTempFile;
 
-mod io;
 mod messages;
+mod parsing;
 mod pty;
 mod shell;
 mod util;
