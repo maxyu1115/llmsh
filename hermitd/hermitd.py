@@ -25,7 +25,7 @@ def main():
         if message_type == "GenerateCommand":
             reply = bot.handle(GenerateCommand(**data))
         elif message_type == "SaveContext":
-            bot.handle(SaveContext(**data))
+            bot.saveContext(SaveContext(**data))
         else:
             reply = ResponseMessage(
                 type="error",
