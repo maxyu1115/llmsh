@@ -1,4 +1,5 @@
 use log;
+use messages::HermitdClient;
 use mio::{Events, Poll};
 use nix::pty::PtyMaster;
 use nix::sys::wait::*;
@@ -52,13 +53,10 @@ fn main() {
     // Fork the process
     match unsafe { expect!(fork(), "Failed to fork process") } {
         ForkResult::Parent { child } => {
-            let client = match messages::HermitdClient::init_client() {
-                Ok(client) => client,
-                Err(error_msg) => {
-                    log::error!("init_client failed with: {}", error_msg);
-                    panic!()
-                }
-            };
+            let client = expect!(
+                HermitdClient::init_client(),
+                "hermitd client initialization failed"
+            );
 
             let stdin_fd = std::io::stdin();
 
@@ -133,7 +131,7 @@ fn safe_handle_terminal(
     child: Pid,
     mut poll: Poll,
     mut events: Events,
-) -> Result<(), String> {
+) -> Result<(), util::Error> {
     let raw_parent_fd = parent_fd.as_raw_fd();
     let raw_stdin_fd = stdin_fd.as_raw_fd();
 

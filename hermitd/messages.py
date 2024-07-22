@@ -1,6 +1,11 @@
 from enum import Enum
-from typing import Literal
+from typing import Literal, Final
 from pydantic import BaseModel
+
+# Alive messages
+ALIVE_REQ: Final[str] = ""
+ALIVE_RESP: Final[str] = "Ack"
+BUSY_RESP: Final[str] = "Busy"
 
 
 # Requests
