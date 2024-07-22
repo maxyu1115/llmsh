@@ -1,11 +1,12 @@
 import zmq
 import json
 from pydantic import BaseModel, Field
-from llm import llm, llama3
-from bot import Bot, SaveContext, GenerateCommand, ResponseMessage
-    
-def init_llm() -> llm:
-    return llama3()
+# from llm import llama3
+from bot import Bot
+import messages
+
+# def init_llm() -> llm:
+#     return llama3()
 
 def main():
     context = zmq.Context()
@@ -19,20 +20,28 @@ def main():
 
     while True:
         message = socket.recv_string()
+        print("Recieved:" + message)
+        if message == "":
+            socket.send_string("Ack")
+            continue
+
         data = json.loads(message)
         message_type = data["type"]
         
         if message_type == "GenerateCommand":
-            reply = bot.handle(GenerateCommand(**data))
+            msg = messages.GenerateCommand(**data)
+            reply = messages.Success(type="Success")
         elif message_type == "SaveContext":
-            bot.saveContext(SaveContext(**data))
+            msg = messages.SaveContext(**data)
+            bot.saveContext(msg)
+            reply = messages.Success(type="Success")
+        elif message_type == "Setup":
+            msg = messages.Setup(**data)
+            reply = messages.SetupSuccess(type="SetupSuccess", session_id=0)
         else:
-            reply = ResponseMessage(
-                type="error",
-                status="unknown message type"
-            )
+            reply = messages.Error(status="Illegal message type")
         
-        socket.send_string(reply.json())
+        socket.send_string(reply.model_dump_json())
 
 if __name__ == "__main__":
     main()
