@@ -77,7 +77,7 @@ fn make_string_id(s: &str) -> String {
 
 const BASH_PROMPT_INPUT_START: &str = "🐚";
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 enum BashState {
     Idle,     // State starts when ##LLMSH-OUT-END##, ends with ##LLMSH-CMD-START##
     CmdInput, // State starts when ##LLMSH-CMD-START##

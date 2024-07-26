@@ -35,7 +35,7 @@ fn main() {
             WriteLogger::init(
                 LevelFilter::Debug,
                 Config::default(),
-                File::create("my_log.log").unwrap(),
+                File::create("llmsh_debug.log").unwrap(),
             ),
             "Logger Initialization failed"
         );
@@ -147,7 +147,7 @@ fn safe_handle_terminal(
                     let n = read(raw_parent_fd, &mut input_buffer);
                     match n {
                         Ok(n) if n > 0 => {
-                            log::debug!("{:?}", &input_buffer[..n]);
+                            log::debug!("Input: {:?}", &input_buffer[..n]);
                             let parsed_outputs = shell.parse_output(&input_buffer[..n]);
                             for out in parsed_outputs {
                                 match out {
@@ -168,14 +168,22 @@ fn safe_handle_terminal(
                                             "Failed to write to stdout"
                                         )?;
                                         match output_type {
-                                            shell::ShellOutputType::Input => {}
-                                            shell::ShellOutputType::Header => {}
+                                            // shell::ShellOutputType::InputAborted => {}
+                                            // shell::ShellOutputType::Header => {}
                                             _ => {
                                                 let context = map_err!(
                                                     String::from_utf8(aggregated),
-                                                    "Inputted string is not utf8"
+                                                    "Shell output string is not utf8"
                                                 )?;
-                                                match client.save_context(output_type, context) {
+                                                log::debug!(
+                                                    "Saving context, raw output: {}",
+                                                    context
+                                                );
+                                                let context =
+                                                    parsing::strip_ansi_escape_sequences(&context);
+                                                match client
+                                                    .save_context(output_type, context.to_string())
+                                                {
                                                     Ok(_) => {}
                                                     Err(err) => {
                                                         log::error!(

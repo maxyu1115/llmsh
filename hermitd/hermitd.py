@@ -18,8 +18,8 @@ def main():
     while True:
         message = socket.recv_string()
         print("Recieved:" + message)
-        if message == "":
-            socket.send_string("Ack")
+        if message == messages.ALIVE_REQ:
+            socket.send_string(messages.ALIVE_RESP)
             continue
 
         data = json.loads(message)
