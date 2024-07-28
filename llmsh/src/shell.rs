@@ -188,30 +188,23 @@ impl ShellParser for Bash {
         }
     }
 
-    fn parse_output(&mut self, input: &[u8]) -> Vec<ParsedOutput> {
-        let mut ret = Vec::new();
-        self.parser.buffer(input);
-        loop {
-            match self.parser.step() {
-                parsing::StepResults::Done => break,
-                parsing::StepResults::Echo(out) => {
-                    ret.push(ParsedOutput::InProgress(out.to_vec()));
-                    break;
-                }
+    fn parse_output(&mut self, output: &[u8]) -> Vec<ParsedOutput> {
+        let results = self.parser.parse(output);
+        return results
+            .into_iter()
+            .map(|ret| match ret {
+                parsing::StepResults::Echo(out) => ParsedOutput::InProgress(out),
                 parsing::StepResults::StateChange {
                     event,
                     step,
                     aggregated,
-                } => {
-                    ret.push(ParsedOutput::Output {
-                        output_type: event,
-                        step,
-                        aggregated,
-                    });
-                }
-            }
-        }
-        return ret;
+                } => ParsedOutput::Output {
+                    output_type: event,
+                    step,
+                    aggregated,
+                },
+            })
+            .collect();
     }
 }
 
