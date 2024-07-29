@@ -3,9 +3,17 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use zmq;
 
-use crate::shell;
 use crate::util;
 use crate::{illegal_state, map_err};
+
+#[derive(Copy, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ShellOutputType {
+    Header,
+    Input,
+    InputAborted,
+    Output,
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -19,7 +27,7 @@ enum Request {
     },
     SaveContext {
         session_id: u32,
-        context_type: shell::ShellOutputType,
+        context_type: ShellOutputType,
         context: String,
     },
 }
@@ -129,7 +137,7 @@ impl HermitdClient {
 
     pub fn save_context(
         &self,
-        context_type: shell::ShellOutputType,
+        context_type: ShellOutputType,
         context: String,
     ) -> Result<(), util::Error> {
         let save_request = Request::SaveContext {

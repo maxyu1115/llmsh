@@ -2,6 +2,7 @@ use lazy_static;
 use log;
 use regex::Regex;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::hash::Hash;
 
 #[derive(PartialEq, Debug)]
@@ -147,6 +148,8 @@ lazy_static::lazy_static! {
         (\x1B[@-_][0-?]*[ -/]*[@-~]) |         # C1 control codes
         \x07                                   # bell character
     ").unwrap();
+
+    static ref ANSI_ALLOWED: HashSet<String> = HashSet::from_iter(["\x1b[D".to_string(), "\x1b[C".to_string()]);
 }
 
 pub fn strip_ansi_escape_sequences(text: &str) -> String {
@@ -154,7 +157,7 @@ pub fn strip_ansi_escape_sequences(text: &str) -> String {
     let result: String = ANSI_ESCAPE
         .replace_all(text, |caps: &regex::Captures| {
             let cap = caps.get(0).unwrap().as_str();
-            if cap == "\x1b[D" || cap == "\x1b[C" {
+            if ANSI_ALLOWED.contains(cap) {
                 cap.to_string()
             } else {
                 String::new()
