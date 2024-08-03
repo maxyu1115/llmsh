@@ -7,6 +7,7 @@ use std::ffi::CString;
 use std::io::{Read, Stdin, Stdout, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
+use std::process::Command;
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
@@ -195,10 +196,7 @@ impl ShellProxy {
                             map_err!(self.stdout_fd.flush(), "Failed to flush stdout")?;
                         }
                         ShellInputTarget::Hermit => {
-                            let prompt = map_err!(
-                                String::from_utf8(input),
-                                "User inputted prompt string is not utf8"
-                            )?;
+                            let prompt = String::from_utf8_lossy(&input).to_string();
                             let recommended_cmd = self.hermit_client.generate_command(prompt)?;
                             self.hermit_print(&recommended_cmd)?;
                         }
@@ -251,10 +249,7 @@ impl ShellProxy {
                                 }
                                 _ => {}
                             }
-                            let context = map_err!(
-                                String::from_utf8(aggregated),
-                                "Shell output string is not utf8"
-                            )?;
+                            let context = String::from_utf8_lossy(&aggregated).to_string();
                             log::debug!("Saving context, raw output: {}", context);
                             let context = parsing::strip_ansi_escape_sequences(&context);
                             match self
@@ -330,7 +325,7 @@ enum BashState {
 
 struct Bash {
     shell_name: String,
-    shell_path: String,
+    shell_pathname: String,
     input_end_marker: String,
     output_end_marker: String,
 }
@@ -347,7 +342,7 @@ impl Bash {
 
         return Bash {
             shell_name: shell_name,
-            shell_path: shell_pathname,
+            shell_pathname,
             input_end_marker: input_end_marker,
             output_end_marker: output_end_marker,
         };
@@ -356,7 +351,7 @@ impl Bash {
 
 impl ShellCreator for Bash {
     fn get_path(&self) -> CString {
-        return CString::new(self.shell_path.clone()).unwrap();
+        return CString::new(self.shell_pathname.clone()).unwrap();
     }
 
     fn get_rcfile(&self) -> String {
@@ -365,8 +360,8 @@ impl ShellCreator for Bash {
 
     fn inject_markers(&self, mut temp_rc: &NamedTempFile) {
         // Inject our prompt markers
-        let orig_ps0 = env::var("PS0").unwrap_or_else(|_| String::from(""));
-        let orig_ps1 = env::var("PS1").unwrap_or_else(|_| String::from(""));
+        let orig_ps0 = get_shell_variable(&self.shell_pathname, "PS0");
+        let orig_ps1 = get_shell_variable(&self.shell_pathname, "PS1");
         let _ = temp_rc.write_all(
             &format!("export PS0=\"{}{}\"\n", self.input_end_marker, &orig_ps0).into_bytes(),
         );
@@ -505,4 +500,29 @@ fn replace_last(haystack: &str, needle: &str, replacement: &str) -> String {
     } else {
         haystack.to_string() // If the needle is not found, return the original string
     }
+}
+
+fn get_shell_variable(shell_pathname: &str, variable_name: &str) -> String {
+    // prioritize getting the variable value from environment
+    let env_res = env::var(variable_name);
+    if let Ok(value) = env_res {
+        return value;
+    }
+
+    // Spawning a shell and executing `echo $variable_name`
+    let echo_output = Command::new(shell_pathname)
+        .arg("-ic")
+        .arg(format!("printf '%s' \"${}\"", variable_name))
+        .output();
+
+    match echo_output {
+        Ok(output) => {
+            // Checking if the command was successful
+            if output.status.success() {
+                return String::from_utf8_lossy(&output.stdout).to_string();
+            }
+        }
+        _ => {}
+    }
+    return String::from("");
 }
