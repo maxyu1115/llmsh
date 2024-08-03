@@ -10,11 +10,11 @@ use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
-use crate::map_err;
 use crate::messages::{HermitdClient, ShellOutputType};
 use crate::parsing;
 use crate::parsing::TransitionCondition::StringID;
 use crate::util;
+use crate::{illegal_state, map_err};
 
 pub enum ParsedOutput {
     // InProgress(&'a [u8]),
@@ -43,31 +43,186 @@ trait ShellOutputParser {
     fn parse_output(&mut self, input: &[u8]) -> Vec<ParsedOutput>;
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+enum ShellInputState {
+    Undetermined, // Start of the input when it can be both
+    HermitPrompt,
+    HermitFollowup,
+    ShellPrompt,
+    Idle, // when not in the input flow
+}
+
 pub struct ShellProxy {
     hermit_client: HermitdClient,
     parent_fd: pty::PtyMaster,
     stdin_fd: Stdin,
     stdout_fd: Stdout,
     io_buffer: [u8; 4096],
+    input_parser: ShellInputStateMachine,
     output_parser: Box<dyn ShellOutputParser>,
 }
 
+struct ShellInputStateMachine {
+    state: ShellInputState,
+    prompt_buffer: Vec<u8>,
+}
+
+enum ShellInputTarget {
+    // For input echoing since we aren't actually writing to the child shell
+    Stdout,
+    Pty,
+    // For communication with hermitd
+    Hermit,
+    // Marker so we just pass through the input without extra copies
+    PassThrough,
+}
+
+type ShellInputActions = Vec<(ShellInputTarget, Vec<u8>)>;
+
+impl ShellInputStateMachine {
+    fn new() -> ShellInputStateMachine {
+        ShellInputStateMachine {
+            state: ShellInputState::Idle,
+            prompt_buffer: Vec::with_capacity(1024),
+        }
+    }
+
+    fn activate(&mut self) -> Result<(), util::Error> {
+        if self.state != ShellInputState::Idle {
+            illegal_state!(format!(
+                "Tried calling activate in state {:?} instead",
+                self.state
+            ));
+        }
+        self.state = ShellInputState::Undetermined;
+        Ok(())
+    }
+
+    fn finish_shell_prompt(&mut self) -> Result<(), util::Error> {
+        if self.state != ShellInputState::ShellPrompt && self.state != ShellInputState::Undetermined
+        {
+            illegal_state!(format!(
+                "Tried calling finish_shell_prompt in state {:?} instead",
+                self.state
+            ));
+        }
+        self.state = ShellInputState::Idle;
+        Ok(())
+    }
+
+    fn _handle_hermit_prompt(&mut self, input: &[u8]) -> ShellInputActions {
+        self.prompt_buffer.extend_from_slice(input);
+        if input.contains(&b'\r') {
+            self.state = ShellInputState::ShellPrompt;
+            let mut echoed_input: Vec<u8> = input.to_vec();
+            echoed_input.push(b'\n');
+            // The order is crucial. We start with echo'ing whatever the user typed, then query hermitd, then return control to our user
+            return vec![
+                (ShellInputTarget::Stdout, echoed_input),
+                (
+                    ShellInputTarget::Hermit,
+                    self.prompt_buffer.drain(..).collect(),
+                ),
+                // After the hermit dialog, input a newline to refresh things
+                (ShellInputTarget::Pty, vec![b'\r']),
+            ];
+        } else if input.contains(&3) {
+            self.state = ShellInputState::ShellPrompt;
+            let mut echoed_input: Vec<u8> = input.to_vec();
+            echoed_input.push(b'\n');
+            return vec![
+                (ShellInputTarget::Stdout, echoed_input),
+                // After the hermit dialog, input a newline to refresh things
+                (ShellInputTarget::Pty, vec![b'\r']),
+            ];
+        } else {
+            return vec![(ShellInputTarget::Stdout, input.to_vec())];
+        }
+    }
+
+    fn _handle_shell_prompt(&self, input: &[u8]) -> ShellInputActions {
+        return vec![(ShellInputTarget::Pty, input.to_vec())];
+    }
+
+    fn _handle_undetermined(&mut self, input: &[u8]) -> ShellInputActions {
+        if input.contains(&b':') {
+            self.state = ShellInputState::HermitPrompt;
+            return self._handle_hermit_prompt(input);
+        } else {
+            self.state = ShellInputState::ShellPrompt;
+            return self._handle_shell_prompt(input);
+        }
+    }
+
+    fn handle_input(&mut self, input: &[u8]) -> ShellInputActions {
+        match self.state {
+            ShellInputState::Undetermined => self._handle_undetermined(input),
+            ShellInputState::HermitPrompt => self._handle_hermit_prompt(input),
+            ShellInputState::HermitFollowup => todo!(),
+            ShellInputState::ShellPrompt => self._handle_shell_prompt(input),
+            ShellInputState::Idle => vec![(ShellInputTarget::PassThrough, Vec::new())],
+        }
+    }
+}
+
 impl ShellProxy {
+    fn hermit_print(&mut self, message: &String) -> Result<(), util::Error> {
+        let wrapped_message = format!("🦀 {}", message).into_bytes();
+
+        map_err!(
+            self.stdout_fd
+                .write_all(&util::fix_newlines(wrapped_message)),
+            "Failed to write to stdout"
+        )?;
+        map_err!(self.stdout_fd.flush(), "Failed to flush stdout")?;
+        Ok(())
+    }
+
     pub fn handle_input(&mut self) -> Result<(), util::Error> {
         let n = self.stdin_fd.read(&mut self.io_buffer);
         match n {
             Ok(n) if n > 0 => {
-                // Write data from stdin to parent PTY
-                map_err!(
-                    self.parent_fd.write_all(&self.io_buffer[..n]),
-                    "Failed to write to parent_fd"
-                )?;
+                let actions = self.input_parser.handle_input(&self.io_buffer[..n]);
+                for (target, input) in actions {
+                    match target {
+                        ShellInputTarget::Stdout => {
+                            log::debug!("Attempting to write to stdout: {:?}", input);
+                            let mapped_input: Vec<u8> = util::fix_newlines(input);
+                            map_err!(
+                                self.stdout_fd.write_all(&mapped_input),
+                                "Failed to write to stdout"
+                            )?;
+                            map_err!(self.stdout_fd.flush(), "Failed to flush stdout")?;
+                        }
+                        ShellInputTarget::Hermit => {
+                            let prompt = map_err!(
+                                String::from_utf8(input),
+                                "User inputted prompt string is not utf8"
+                            )?;
+                            let recommended_cmd = self.hermit_client.generate_command(prompt)?;
+                            self.hermit_print(&recommended_cmd)?;
+                        }
+                        ShellInputTarget::Pty => {
+                            map_err!(
+                                self.parent_fd.write_all(&input),
+                                "Failed to write to parent_fd"
+                            )?;
+                        }
+                        ShellInputTarget::PassThrough => {
+                            map_err!(
+                                self.parent_fd.write_all(&self.io_buffer[..n]),
+                                "Failed to write to parent_fd"
+                            )?;
+                        }
+                    }
+                }
             }
             Ok(_) => {}
             Err(e) => return map_err!(Err(e), "Failed to read from stdin"),
         }
         Ok(())
     }
+
     pub fn handle_output(&mut self) -> Result<bool, util::Error> {
         // use unistd::read instead, in order to have nix::errno::Errno::EIO
         let n = unistd::read(self.parent_fd.as_raw_fd(), &mut self.io_buffer);
@@ -88,27 +243,30 @@ impl ShellProxy {
                         } => {
                             map_err!(self.stdout_fd.write_all(&step), "Failed to write to stdout")?;
                             match output_type {
-                                // shell::ShellOutputType::InputAborted => {}
-                                // shell::ShellOutputType::Header => {}
-                                _ => {
-                                    let context = map_err!(
-                                        String::from_utf8(aggregated),
-                                        "Shell output string is not utf8"
-                                    )?;
-                                    log::debug!("Saving context, raw output: {}", context);
-                                    let context = parsing::strip_ansi_escape_sequences(&context);
-                                    match self
-                                        .hermit_client
-                                        .save_context(output_type, context.to_string())
-                                    {
-                                        Ok(_) => {}
-                                        Err(err) => {
-                                            log::error!("Failed to write to hermitd: {}", err);
-                                            break;
-                                        }
-                                    }
+                                ShellOutputType::Header => {
+                                    self.input_parser.activate()?;
                                 }
-                            };
+                                ShellOutputType::Input | ShellOutputType::InputAborted => {
+                                    self.input_parser.finish_shell_prompt()?;
+                                }
+                                _ => {}
+                            }
+                            let context = map_err!(
+                                String::from_utf8(aggregated),
+                                "Shell output string is not utf8"
+                            )?;
+                            log::debug!("Saving context, raw output: {}", context);
+                            let context = parsing::strip_ansi_escape_sequences(&context);
+                            match self
+                                .hermit_client
+                                .save_context(output_type, context.to_string())
+                            {
+                                Ok(_) => {}
+                                Err(err) => {
+                                    log::error!("Failed to write to hermitd: {}", err);
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
@@ -240,6 +398,7 @@ impl ShellCreator for Bash {
         stdin_fd: Stdin,
         stdout_fd: Stdout,
     ) -> ShellProxy {
+        let input_parser = ShellInputStateMachine::new();
         let output_parser = Box::new(BashParser::new(
             &self.input_end_marker,
             &self.output_end_marker,
@@ -250,6 +409,7 @@ impl ShellCreator for Bash {
             stdin_fd,
             stdout_fd,
             io_buffer: [0; 4096],
+            input_parser,
             output_parser,
         }
     }
@@ -294,7 +454,7 @@ impl BashParser {
                         BashState::Output,
                         vec![
                             (
-                                // User inputed multiple commands at once, in which case there 
+                                // User inputed multiple commands at once, in which case there
                                 // will be multiple output blocks separated by input end markers
                                 StringID(make_string_id(&input_end_marker), false),
                                 BashState::Output,

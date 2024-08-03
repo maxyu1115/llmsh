@@ -71,3 +71,16 @@ pub fn touch(path: &Path) -> std::io::Result<()> {
         Err(e) => Err(e),
     }
 }
+
+pub fn fix_newlines(input: Vec<u8>) -> Vec<u8> {
+    input
+        .into_iter()
+        .flat_map(|c| {
+            if c == b'\n' {
+                vec![b'\r', b'\n'].into_iter()
+            } else {
+                vec![c].into_iter()
+            }
+        })
+        .collect()
+}

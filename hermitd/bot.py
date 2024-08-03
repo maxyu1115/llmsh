@@ -54,7 +54,7 @@ class Bot:
     ) -> messages.CommandResponse:
         prompt = "Generate a bash command to solve the issue: "
         command = self.llm.generate(request.prompt, header=prompt)
-        return messages.CommandResponse(type="CommandResponse", result=command)
+        return messages.CommandResponse(type="CommandResponse", command=command)
 
     def save_context(self, context: messages.SaveContext):
         prompt = "This is the commands user previous ran, the corresponding output, and exit code. Generate a summary of user's action, and outcome."
