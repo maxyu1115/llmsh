@@ -122,6 +122,8 @@ fn main() {
     }
 }
 
+const MAX_EINTR_RETRY: u32 = 2;
+
 // This function should never panic
 fn safe_handle_terminal(
     mut shell_proxy: shell::ShellProxy,
@@ -130,9 +132,34 @@ fn safe_handle_terminal(
     mut events: Events,
 ) -> Result<(), util::Error> {
     let mut child_exited = false;
+    let mut retry_counter = 0;
 
     loop {
-        map_err!(poll.poll(&mut events, None), "Failed to poll events")?;
+        match poll.poll(&mut events, None) {
+            Ok(()) => {
+                retry_counter = 0;
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                // we seem to be only seeing this error after integrating reedline...
+                // TODO: properly debug this issue
+                if retry_counter < MAX_EINTR_RETRY {
+                    log::warn!(
+                        "Failed to poll event due to io::ErrorKind::Interrupted, retry counter {}",
+                        retry_counter
+                    );
+                    retry_counter += 1;
+                    continue;
+                } else {
+                    return map_err!(
+                        Err(e),
+                        "Repeatedly failed to poll events due to io::ErrorKind::Interrupted"
+                    );
+                }
+            }
+            Err(e) => {
+                return map_err!(Err(e), "Failed to poll events");
+            }
+        };
 
         for event in events.iter() {
             match event.token() {

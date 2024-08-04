@@ -1,6 +1,8 @@
+use core::panic;
 use log::debug;
 use nix::pty;
 use nix::unistd;
+use reedline::{DefaultPrompt, DefaultPromptSegment, Reedline, Signal};
 use std::collections::HashMap;
 use std::env;
 use std::ffi::CString;
@@ -16,6 +18,12 @@ use crate::parsing;
 use crate::parsing::TransitionCondition::StringID;
 use crate::util;
 use crate::{illegal_state, map_err};
+
+const SHELL_PROMPT_INPUT_START: &str = "🐚";
+
+// Other candidates: 🌊,📶,📨,📡,🎤
+const HERMITD_PROMPT_HEADER: &str = "🌊";
+const HERMITD_RESP_HEADER: &str = "🦀〉";
 
 pub enum ParsedOutput {
     // InProgress(&'a [u8]),
@@ -65,7 +73,8 @@ pub struct ShellProxy {
 
 struct ShellInputStateMachine {
     state: ShellInputState,
-    prompt_buffer: Vec<u8>,
+    input_rl: Reedline,
+    rl_prompt: DefaultPrompt,
 }
 
 enum ShellInputTarget {
@@ -84,7 +93,11 @@ impl ShellInputStateMachine {
     fn new() -> ShellInputStateMachine {
         ShellInputStateMachine {
             state: ShellInputState::Idle,
-            prompt_buffer: Vec::with_capacity(1024),
+            input_rl: Reedline::create(),
+            rl_prompt: DefaultPrompt::new(
+                DefaultPromptSegment::Basic(HERMITD_PROMPT_HEADER.to_string()),
+                DefaultPromptSegment::Empty,
+            ),
         }
     }
 
@@ -111,34 +124,25 @@ impl ShellInputStateMachine {
         Ok(())
     }
 
-    fn _handle_hermit_prompt(&mut self, input: &[u8]) -> ShellInputActions {
-        self.prompt_buffer.extend_from_slice(input);
-        if input.contains(&b'\r') {
-            self.state = ShellInputState::ShellPrompt;
-            let mut echoed_input: Vec<u8> = input.to_vec();
-            echoed_input.push(b'\n');
-            // The order is crucial. We start with echo'ing whatever the user typed, then query hermitd, then return control to our user
-            return vec![
-                (ShellInputTarget::Stdout, echoed_input),
-                (
-                    ShellInputTarget::Hermit,
-                    self.prompt_buffer.drain(..).collect(),
-                ),
-                // After the hermit dialog, input a newline to refresh things
-                (ShellInputTarget::Pty, vec![b'\r']),
-            ];
-        } else if input.contains(&3) {
-            self.state = ShellInputState::ShellPrompt;
-            let mut echoed_input: Vec<u8> = input.to_vec();
-            echoed_input.push(b'\n');
-            return vec![
-                (ShellInputTarget::Stdout, echoed_input),
-                // After the hermit dialog, input a newline to refresh things
-                (ShellInputTarget::Pty, vec![b'\r']),
-            ];
-        } else {
-            return vec![(ShellInputTarget::Stdout, input.to_vec())];
+    fn _handle_hermit_prompt(&mut self) -> ShellInputActions {
+        let mut ret: ShellInputActions = Vec::with_capacity(2);
+
+        let sig = self.input_rl.read_line(&self.rl_prompt);
+        match sig {
+            Ok(Signal::Success(buffer)) => {
+                ret.push((ShellInputTarget::Hermit, buffer.as_bytes().to_vec()));
+            }
+            Ok(Signal::CtrlD) | Ok(Signal::CtrlC) => {}
+            err => {
+                log::error!("Unknown error during handling hermitd prompt: {:?}", err);
+            }
         }
+
+        // After the hermit dialog, input a newline to refresh things
+        ret.push((ShellInputTarget::Pty, vec![b'\r']));
+        //
+        self.state = ShellInputState::ShellPrompt;
+        return ret;
     }
 
     fn _handle_shell_prompt(&self, input: &[u8]) -> ShellInputActions {
@@ -148,7 +152,7 @@ impl ShellInputStateMachine {
     fn _handle_undetermined(&mut self, input: &[u8]) -> ShellInputActions {
         if input.contains(&b':') {
             self.state = ShellInputState::HermitPrompt;
-            return self._handle_hermit_prompt(input);
+            return self._handle_hermit_prompt();
         } else {
             self.state = ShellInputState::ShellPrompt;
             return self._handle_shell_prompt(input);
@@ -158,7 +162,7 @@ impl ShellInputStateMachine {
     fn handle_input(&mut self, input: &[u8]) -> ShellInputActions {
         match self.state {
             ShellInputState::Undetermined => self._handle_undetermined(input),
-            ShellInputState::HermitPrompt => self._handle_hermit_prompt(input),
+            ShellInputState::HermitPrompt => panic!(),
             ShellInputState::HermitFollowup => todo!(),
             ShellInputState::ShellPrompt => self._handle_shell_prompt(input),
             ShellInputState::Idle => vec![(ShellInputTarget::PassThrough, Vec::new())],
@@ -168,7 +172,7 @@ impl ShellInputStateMachine {
 
 impl ShellProxy {
     fn hermit_print(&mut self, message: &String) -> Result<(), util::Error> {
-        let wrapped_message = format!("🦀 {}", message).into_bytes();
+        let wrapped_message = format!("{}{}", HERMITD_RESP_HEADER, message).into_bytes();
 
         map_err!(
             self.stdout_fd
@@ -252,16 +256,8 @@ impl ShellProxy {
                             let context = String::from_utf8_lossy(&aggregated).to_string();
                             log::debug!("Saving context, raw output: {}", context);
                             let context = parsing::strip_ansi_escape_sequences(&context);
-                            match self
-                                .hermit_client
-                                .save_context(output_type, context.to_string())
-                            {
-                                Ok(_) => {}
-                                Err(err) => {
-                                    log::error!("Failed to write to hermitd: {}", err);
-                                    break;
-                                }
-                            }
+                            self.hermit_client
+                                .save_context(output_type, context.to_string())?;
                         }
                     }
                 }
@@ -313,8 +309,6 @@ fn make_string_id(s: &str) -> String {
 }
 
 /*********************************** BASH ***********************************/
-
-const BASH_PROMPT_INPUT_START: &str = "🐚";
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 enum BashState {
@@ -368,7 +362,7 @@ impl ShellCreator for Bash {
 
         // If current ps1 uses $ as the ending, replace with our crab identifier
         if let Some(_dollar_idx) = orig_ps1.rfind("\\$") {
-            let new_ps1 = replace_last(&orig_ps1, "\\$", BASH_PROMPT_INPUT_START);
+            let new_ps1 = replace_last(&orig_ps1, "\\$", SHELL_PROMPT_INPUT_START);
 
             let _ = temp_rc.write_all(
                 &format!("export PS1=\"{}{}\"\n", self.output_end_marker, new_ps1).into_bytes(),
@@ -379,7 +373,7 @@ impl ShellCreator for Bash {
                     "export PS1=\"{}{}{}\"\n",
                     self.output_end_marker,
                     &orig_ps1,
-                    String::from(BASH_PROMPT_INPUT_START)
+                    String::from(SHELL_PROMPT_INPUT_START)
                 )
                 .into_bytes(),
             );
@@ -423,7 +417,7 @@ impl BashParser {
                         BashState::Idle,
                         vec![(
                             // transition from end of output to pending new input
-                            StringID(make_string_id(BASH_PROMPT_INPUT_START), true),
+                            StringID(make_string_id(SHELL_PROMPT_INPUT_START), true),
                             BashState::CmdInput,
                             ShellOutputType::Header,
                         )],
