@@ -1,63 +1,29 @@
-from llm.interfaces import LLM
-from llm.llama3 import Llama3
-import messages
-
-
-class History:
-    class Blob:
-        command: str
-        output: str
-        exit_code: str
-        summary: str
-
-        def __init__(
-            self, command: str, output: str, exit_code: str, summary: str
-        ) -> None:
-            self.command = command
-            self.output = output
-            self.exit_code = exit_code
-            self.summary = summary
-
-    blob_list: list[Blob]
-    session_id: str
-    summary: str
-
-    def __init__(self, session_id: str) -> None:
-        self.session_id = session_id
-        self.blob_list = list()
-
-    def append(self, context: messages.SaveContext, summary: str) -> None:
-        blob = self._save_context_to_blob(context, summary)
-        self.blob_list.append(blob)
-
-    def _save_context_to_blob(
-        self, context: messages.SaveContext, summary: str
-    ) -> Blob:
-        return self.Blob(context.command, context.output, context.exit_code, summary)
+import textwrap
+from hermitd.llm import LLM
+from hermitd.llm.llama3 import Llama3
+from hermitd.context import Context
+import hermitd.messages as messages
 
 
 class Bot:
-    llm: LLM
-    spec: messages.Setup
-    history: History
+    GEN_CMD_PROMPT = textwrap.dedent(
+        """You are an assistant for our user using a posix shell. 
+        Your job is to generate a shell command satisfying the USER's prompt. \n
+        """
+    )
 
-    def __init__(self) -> None:
-        self.llm = Llama3()
-
-    def set_up(self, spec: messages.Setup):
-        # TODO properly define
-        self.history = History(0)
-        self.spec = spec
+    def __init__(self, user: str, session_id: int) -> None:
+        self.user: str = user
+        self.session_id: int = session_id
+        self.llm: LLM = Llama3()
+        self.context: Context = Context()
 
     def generate_command(
         self, request: messages.GenerateCommand
     ) -> messages.CommandResponse:
-        prompt = "Generate a bash command to solve the issue: "
+        prompt = Bot.GEN_CMD_PROMPT + self.context.get_context_prompt()
         command = self.llm.generate(request.prompt, header=prompt)
         return messages.CommandResponse(type="CommandResponse", command=command)
 
     def save_context(self, context: messages.SaveContext):
-        prompt = "This is the commands user previous ran, the corresponding output, and exit code. Generate a summary of user's action, and outcome."
-        msg = "input: " + context.command + "\n output: " + context.output
-        summary = self.llm.generate(msg, prompt)
-        self.history.append(context, summary)
+        self.context.save_shell_context(context.context_type, context.context)

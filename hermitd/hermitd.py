@@ -1,17 +1,20 @@
 import zmq
 import json
-from pydantic import BaseModel, Field
-import bot
-import messages
+import hermitd.bot as bot
+import hermitd.messages as messages
 
 
-def main():
+HERMITD_IPC_ENDPOINT = "ipc:///tmp/hermitd-ipc"
+
+
+def run_daemon():
     context = zmq.Context()
     socket = context.socket(zmq.REP)
-    socket.bind("ipc:///tmp/hermitd-ipc")
+    socket.bind(HERMITD_IPC_ENDPOINT)
 
     # initiates llm.
-    hermit = bot.Bot()
+    # TODO: properly intialize it on a per session basis
+    hermit = bot.Bot("", 0)
 
     print("Python server is running...")
 
@@ -35,7 +38,6 @@ def main():
                 reply = messages.Success(type="Success")
             elif message_type == "Setup":
                 msg = messages.Setup(**data)
-                hermit.set_up(msg)
                 reply = messages.SetupSuccess(type="SetupSuccess", session_id=0)
             else:
                 reply = messages.Error(status="Illegal message type")
@@ -46,7 +48,3 @@ def main():
         print("Reply: " + reply_json)
 
         socket.send_string(reply_json)
-
-
-if __name__ == "__main__":
-    main()

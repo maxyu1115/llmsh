@@ -5,8 +5,8 @@ from vllm.usage.usage_lib import UsageContext
 from vllm.utils import Counter
 from vllm.outputs import RequestOutput
 from vllm import SamplingParams
-from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
-from llm.interfaces import LLM
+
+from hermitd.llm._interfaces import LLM
 
 
 class StreamingLLM:
