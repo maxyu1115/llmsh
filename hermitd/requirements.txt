@@ -6,3 +6,4 @@ vllm==0.4.3
 
 # development
 black
+pytest
