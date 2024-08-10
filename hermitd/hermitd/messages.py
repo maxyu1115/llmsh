@@ -9,12 +9,16 @@ BUSY_RESP: Final[str] = "Busy"
 
 
 # Requests
-class Setup(BaseModel):
+class HermitRequest(BaseModel):
+    pass
+
+
+class Setup(HermitRequest):
     type: Literal["Setup"]
     user: str
 
 
-class GenerateCommand(BaseModel):
+class GenerateCommand(HermitRequest):
     type: Literal["GenerateCommand"]
     session_id: int
     prompt: str
@@ -27,32 +31,36 @@ class ShellOutputType(str, Enum):
     Output = "Output"
 
 
-class WrappedOutputType(BaseModel):
-    type: ShellOutputType
-
-
-class SaveContext(BaseModel):
+class SaveContext(HermitRequest):
     type: Literal["SaveContext"]
     session_id: int
     context: str
-    context_type: WrappedOutputType
+    context_type: ShellOutputType
 
 
 # Responses
-class Success(BaseModel):
+class HermitResponse(BaseModel):
+    pass
+
+
+class Success(HermitResponse):
     type: Literal["Success"]
 
 
-class Error(BaseModel):
+# Singleton
+SUCCESS: Final[Success] = Success(type="Success")
+
+
+class Error(HermitResponse):
     type: Literal["Error"]
     status: str
 
 
-class SetupSuccess(BaseModel):
+class SetupSuccess(HermitResponse):
     type: Literal["SetupSuccess"]
     session_id: int
 
 
-class CommandResponse(BaseModel):
+class CommandResponse(HermitResponse):
     type: Literal["CommandResponse"]
     command: str

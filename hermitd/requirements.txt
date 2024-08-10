@@ -2,7 +2,7 @@ pydantic
 pyzmq
 transformers
 # for some reason seeing vllm crash wsl upon exit in higher versions...
-vllm==0.4.3
+vllm==0.5.3
 
 # development
 black

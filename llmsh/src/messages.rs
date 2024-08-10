@@ -7,7 +7,6 @@ use crate::util;
 use crate::{illegal_state, map_err};
 
 #[derive(Copy, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
 pub enum ShellOutputType {
     Header,
     Input,

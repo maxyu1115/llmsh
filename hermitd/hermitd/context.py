@@ -15,7 +15,7 @@ class Context:
     )
     PROMPT_MAP = {
         ShellOutputType.Input: 'User Input: \\"{}\\"',
-        ShellOutputType.Input: 'User Aborted Input: \\"{}\\"',
+        ShellOutputType.InputAborted: 'User Aborted Input: \\"{}\\"',
         ShellOutputType.Output: 'Shell Output: \\"{}\\"',
     }
 
