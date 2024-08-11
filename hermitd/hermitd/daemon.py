@@ -2,10 +2,12 @@ import json
 import traceback
 import zmq
 from hermitd.bot import Bot
+import hermitd.config as config
 import hermitd.messages as messages
-from hermitd.llm import LLMFactory, SingletonLLMFactory
+from hermitd.llm import LLMFactory, SingletonLLMFactory, SupportedLLMs
+from hermitd.llm.claude import Claude35Sonnet
+from hermitd.llm.gpt import GPT4oMini
 from hermitd.llm.llama3 import Llama3
-
 
 HERMITD_IPC_ENDPOINT = "ipc:///tmp/hermitd-ipc"
 MAX_SESSIONS = 16
@@ -85,8 +87,27 @@ class Hermitd:
             self._run()
 
 
-def run_daemon():
-    llm_provider = SingletonLLMFactory(Llama3())
+def get_llm_provider(cfg: config.Config, secrets: config.Secrets) -> LLMFactory:
+    if (not cfg.llm) or (cfg.llm == SupportedLLMs.Llama3):
+        return SingletonLLMFactory(Llama3())
+    elif cfg.llm == SupportedLLMs.Claude:
+        if not secrets.anthropic:
+            raise ValueError("Specified claude but did not set an Anthropic API key")
+        return SingletonLLMFactory(Claude35Sonnet(secrets.anthropic))
+    elif cfg.llm == SupportedLLMs.GPT:
+        if not secrets.openai:
+            raise ValueError("Specified gpt but did not set an OpenAI API key")
+        import openai
+        openai.api_key = secrets.openai
+        return SingletonLLMFactory(GPT4oMini())
+
+
+def run_daemon(config_path):
+    cfg = config.read_config(config_path)
+    secrets = config.read_api_keys()
+
+    llm_provider = get_llm_provider(cfg, secrets)
+
     hermitd = Hermitd(llm_provider)
     hermitd.start()
     hermitd.run()

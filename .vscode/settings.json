@@ -1,0 +1,5 @@
+{
+    "files.associations": {
+        "hermitd.conf*": "yaml"
+    }
+}

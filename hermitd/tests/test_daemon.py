@@ -2,13 +2,13 @@ import json
 import pytest
 from unittest.mock import MagicMock, patch
 import zmq
-from hermitd import messages
-from hermitd.hermitd import Hermitd, MAX_SESSIONS
+import hermitd.messages as messages
+from hermitd.daemon import Hermitd, MAX_SESSIONS
 
 
 @pytest.fixture
 def mock_llm_provider():
-    with patch("hermitd.hermitd.LLMFactory") as mock_factory:
+    with patch("hermitd.daemon.LLMFactory") as mock_factory:
         mock_llm = MagicMock()
         mock_factory.return_value.get_llm.return_value = mock_llm
         yield mock_factory
@@ -17,7 +17,7 @@ def mock_llm_provider():
 # Fixture to patch the zmq socket
 @pytest.fixture
 def mock_zmq_socket():
-    with patch("hermitd.hermitd.zmq.Context") as mock_context:
+    with patch("hermitd.daemon.zmq.Context") as mock_context:
         mock_socket = MagicMock()
         mock_context.return_value.socket.return_value = mock_socket
         yield mock_socket
@@ -25,7 +25,7 @@ def mock_zmq_socket():
 
 @pytest.fixture
 def mock_bot():
-    with patch("hermitd.hermitd.Bot") as mock_bot:
+    with patch("hermitd.daemon.Bot") as mock_bot:
         yield mock_bot.return_value
 
 
