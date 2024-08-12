@@ -50,20 +50,24 @@ fn main() {
     // Fork the process
     match unsafe { expect!(fork(), "Failed to fork process") } {
         ForkResult::Parent { child } => {
-            let client = expect!(
+            let mut stdout_fd = std::io::stdout();
+            let stdin_fd = std::io::stdin();
+
+            let (client, motd) = expect!(
                 HermitdClient::init_client(),
                 "hermitd client initialization failed"
             );
-
-            let stdin_fd = std::io::stdin();
+            expect!(
+                shell::hermit_print(&mut stdout_fd, &motd),
+                "Failed to print motd"
+            );
 
             let (poll, events) = pty::setup_parent_pty(&parent_fd, &stdin_fd);
 
             // Set terminal to raw mode
             let original_termios = pty::set_raw_mode(&stdin_fd);
 
-            let shell_proxy =
-                shell_creator.create_proxy(client, parent_fd, stdin_fd, std::io::stdout());
+            let shell_proxy = shell_creator.create_proxy(client, parent_fd, stdin_fd, stdout_fd);
 
             let exit_result = safe_handle_terminal(shell_proxy, child, poll, events);
             let mut exit_code = 0;

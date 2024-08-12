@@ -170,17 +170,20 @@ impl ShellInputStateMachine {
     }
 }
 
-impl ShellProxy {
-    fn hermit_print(&mut self, message: &String) -> Result<(), util::Error> {
-        let wrapped_message = format!("{}{}", HERMITD_RESP_HEADER, message).into_bytes();
+pub fn hermit_print(stdout_fd: &mut Stdout, message: &String) -> Result<(), util::Error> {
+    let wrapped_message = format!("{}{}", HERMITD_RESP_HEADER, message).into_bytes();
 
-        map_err!(
-            self.stdout_fd
-                .write_all(&util::fix_newlines(wrapped_message)),
-            "Failed to write to stdout"
-        )?;
-        map_err!(self.stdout_fd.flush(), "Failed to flush stdout")?;
-        Ok(())
+    map_err!(
+        stdout_fd.write_all(&util::fix_newlines(wrapped_message)),
+        "Failed to write to stdout"
+    )?;
+    map_err!(stdout_fd.flush(), "Failed to flush stdout")?;
+    Ok(())
+}
+
+impl ShellProxy {
+    fn _hermit_print(&mut self, message: &String) -> Result<(), util::Error> {
+        return hermit_print(&mut self.stdout_fd, message);
     }
 
     pub fn handle_input(&mut self) -> Result<(), util::Error> {
@@ -202,7 +205,7 @@ impl ShellProxy {
                         ShellInputTarget::Hermit => {
                             let prompt = String::from_utf8_lossy(&input).to_string();
                             let recommended_cmd = self.hermit_client.generate_command(prompt)?;
-                            self.hermit_print(&recommended_cmd)?;
+                            self._hermit_print(&recommended_cmd)?;
                         }
                         ShellInputTarget::Pty => {
                             map_err!(

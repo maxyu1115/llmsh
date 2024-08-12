@@ -18,6 +18,13 @@ ILLEGAL_IPC_ERROR = messages.Error(
 )
 
 
+MOTD = """Welcome to llmsh! I am the llm-powered hermit living in your shell, here to assist you. 
+llmsh is simply a wrapper around your favorite shell specified in $SHELL, and is intended to work just like your shell.
+If you want to ask for my help, type `:` as the first character on the prompt line. 
+(Currently due to technical difficulties, clear out a line and then typing `:` will not work)
+"""
+
+
 class Hermitd:
     def __init__(self, llm_provider: LLMFactory) -> None:
         self.zmq_context: zmq.Context = zmq.Context()
@@ -41,7 +48,9 @@ class Hermitd:
         if message_type == "Setup":
             msg = messages.Setup(**data)
             session_id = self.create_session(msg.user)
-            return messages.SetupSuccess(type="SetupSuccess", session_id=session_id)
+            return messages.SetupSuccess(
+                type="SetupSuccess", session_id=session_id, motd=MOTD
+            )
 
         if "session_id" not in data:
             return ILLEGAL_IPC_ERROR
@@ -98,6 +107,7 @@ def get_llm_provider(cfg: config.Config, secrets: config.Secrets) -> LLMFactory:
         if not secrets.openai:
             raise ValueError("Specified gpt but did not set an OpenAI API key")
         import openai
+
         openai.api_key = secrets.openai
         return SingletonLLMFactory(GPT4oMini())
 

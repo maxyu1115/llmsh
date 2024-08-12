@@ -59,6 +59,7 @@ class Error(HermitResponse):
 class SetupSuccess(HermitResponse):
     type: Literal["SetupSuccess"]
     session_id: int
+    motd: str
 
 
 class CommandResponse(HermitResponse):

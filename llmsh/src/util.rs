@@ -84,3 +84,18 @@ pub fn fix_newlines(input: Vec<u8>) -> Vec<u8> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    // Import the parent module's items
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case("\n", "\r\n")]
+    #[case("H\ni\r?", "H\r\ni\r?")]
+    #[case("Hi.", "Hi.")]
+    fn test_fix_newlines(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(fix_newlines(input.as_bytes().to_vec()), expected.as_bytes().to_vec());
+    }
+}

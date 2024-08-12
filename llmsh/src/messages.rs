@@ -34,7 +34,7 @@ enum Request {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
 enum Response {
-    SetupSuccess { session_id: u32 },
+    SetupSuccess { session_id: u32, motd: String },
     CommandResponse { command: String },
     Error { status: String },
     // generic success message, used for apis we only care about success vs failure
@@ -53,7 +53,7 @@ pub struct HermitdClient {
 }
 
 impl HermitdClient {
-    pub fn init_client() -> Result<HermitdClient, util::Error> {
+    pub fn init_client() -> Result<(HermitdClient, String), util::Error> {
         let context = zmq::Context::new();
         let socket = map_err!(context.socket(zmq::REQ), "Failed to create zmq socket")?;
         // Set linger so we can close
@@ -62,9 +62,9 @@ impl HermitdClient {
             .connect(HERMITD_ENDPOINT),
             "Failed to connect to hermitd ipc endpoint [/tmp/hermitd-ipc], please check your file system permissions")?;
 
-        let session_id = HermitdClient::setup_session(&socket)?;
+        let (session_id, motd) = HermitdClient::setup_session(&socket)?;
 
-        Ok(HermitdClient { socket, session_id })
+        Ok((HermitdClient { socket, session_id }, motd))
     }
 
     fn _send_str(socket: &zmq::Socket, msg: &str, timeout: i32) -> Result<String, util::Error> {
@@ -117,12 +117,12 @@ impl HermitdClient {
         return Ok(reply);
     }
 
-    fn setup_session(socket: &zmq::Socket) -> Result<u32, util::Error> {
+    fn setup_session(socket: &zmq::Socket) -> Result<(u32, String), util::Error> {
         let user: String = map_err!(env::var("USER"), "$USER is not set")?;
         let setup_request = Request::Setup { user };
         let reply = HermitdClient::send_msg(socket, setup_request, 1000)?;
         match reply {
-            Response::SetupSuccess { session_id } => Ok(session_id),
+            Response::SetupSuccess { session_id, motd } => Ok((session_id, motd)),
             Response::Error { status } => Err(util::Error::HermitFailed(format!(
                 "Hermitd returned error with status {}",
                 status
