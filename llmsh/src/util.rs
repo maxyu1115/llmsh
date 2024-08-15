@@ -96,6 +96,9 @@ mod tests {
     #[case("H\ni\r?", "H\r\ni\r?")]
     #[case("Hi.", "Hi.")]
     fn test_fix_newlines(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(fix_newlines(input.as_bytes().to_vec()), expected.as_bytes().to_vec());
+        assert_eq!(
+            fix_newlines(input.as_bytes().to_vec()),
+            expected.as_bytes().to_vec()
+        );
     }
 }

@@ -29,6 +29,9 @@ enum Request {
         context_type: ShellOutputType,
         context: String,
     },
+    Exit {
+        session_id: u32,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -175,5 +178,15 @@ impl HermitdClient {
                 other
             )),
         }
+    }
+
+    pub fn exit(&self) {
+        let exit_request = Request::Exit {
+            session_id: self.session_id,
+        };
+
+        // For exit we don't care if we succeed or not, as we're already exiting anyways,
+        //  and it's only courtesy to let hermitd know
+        let _ = HermitdClient::send_msg(&self.socket, exit_request, 2000);
     }
 }

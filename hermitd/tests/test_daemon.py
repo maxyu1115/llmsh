@@ -81,6 +81,19 @@ def test_handle_generate_command(mock_bot, patched_hermitd):
     assert response.command == answer
 
 
+def test_handle_generate_command(mock_bot, patched_hermitd):
+    # init session
+    session_id = patched_hermitd.create_session("test_user")
+    exit_data = {"type": "Exit", "session_id": session_id}
+    cmd_data = {"type": "GenerateCommand", "prompt": "hey", "session_id": session_id}
+
+    response = patched_hermitd.handle_message(exit_data)
+    assert isinstance(response, messages.Success)
+
+    response = patched_hermitd.handle_message(cmd_data)
+    assert isinstance(response, messages.Error)
+
+
 def test_handle_save_context(mock_bot, patched_hermitd):
     context_type = messages.ShellOutputType.Input
     context = "hey"

@@ -68,6 +68,10 @@ class Hermitd:
             msg = messages.SaveContext(**data)
             session.save_context(msg.context_type, msg.context)
             return messages.SUCCESS
+        elif message_type == "Exit":
+            del self.sessions[session_id]
+            self.available_session_ids.append(session_id)
+            return messages.SUCCESS
         else:
             return messages.Error(type="Error", status="Illegal message type")
 

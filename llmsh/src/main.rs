@@ -67,9 +67,10 @@ fn main() {
             // Set terminal to raw mode
             let original_termios = pty::set_raw_mode(&stdin_fd);
 
-            let shell_proxy = shell_creator.create_proxy(client, parent_fd, stdin_fd, stdout_fd);
+            let mut shell_proxy =
+                shell_creator.create_proxy(client, parent_fd, stdin_fd, stdout_fd);
 
-            let exit_result = safe_handle_terminal(shell_proxy, child, poll, events);
+            let exit_result = safe_handle_terminal(&mut shell_proxy, child, poll, events);
             let mut exit_code = 0;
             match exit_result {
                 Ok(_) => {
@@ -80,6 +81,9 @@ fn main() {
                     exit_code = 1;
                 }
             }
+
+            // Properly clean up, such as letting hermitd know we're exiting
+            shell_proxy.exit();
 
             // Restore terminal to original state
             pty::restore_terminal(std::io::stdin(), &original_termios);
@@ -130,7 +134,7 @@ const MAX_EINTR_RETRY: u32 = 2;
 
 // This function should never panic
 fn safe_handle_terminal(
-    mut shell_proxy: shell::ShellProxy,
+    shell_proxy: &mut shell::ShellProxy,
     child: Pid,
     mut poll: Poll,
     mut events: Events,

@@ -24,6 +24,11 @@ class GenerateCommand(HermitRequest):
     prompt: str
 
 
+class Exit(HermitRequest):
+    type: Literal["Exit"]
+    session_id: int
+
+
 class ShellOutputType(str, Enum):
     Header = "Header"
     Input = "Input"

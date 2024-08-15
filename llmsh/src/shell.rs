@@ -275,6 +275,10 @@ impl ShellProxy {
         }
         return Ok(true);
     }
+
+    pub fn exit(self) {
+        self.hermit_client.exit();
+    }
 }
 
 // TODO: symlink handling, especially for /bin/sh?
