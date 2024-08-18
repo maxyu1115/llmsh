@@ -19,6 +19,13 @@ mod shell;
 mod util;
 
 fn main() {
+    let args: Vec<String> = env::args().collect();
+    let mut shell_name: Option<String> = Option::None;
+    if args.len() > 1 {
+        // Access the first argument (excluding the binary name)
+        shell_name = Option::Some(args[1].clone());
+    }
+
     let home_dir = expect!(env::var("HOME"), "Could not get home directory");
     expect!(
         util::touch(&Path::new(&home_dir).join(".llmshrc")),
@@ -40,7 +47,7 @@ fn main() {
 
     // TODO: enhance error handling
     let shell_creator = expect!(
-        shell::get_shell(),
+        shell::get_shell(shell_name),
         "Failed to identify shell, bad $SHELL path"
     );
 

@@ -294,8 +294,11 @@ impl ShellProxy {
 //     Ok(current_path)
 // }
 
-pub fn get_shell() -> Result<Box<dyn ShellCreator>, util::Error> {
-    let shell_pathname: String = map_err!(env::var("SHELL"), "$SHELL is not set")?;
+pub fn get_shell(shell_name: Option<String>) -> Result<Box<dyn ShellCreator>, util::Error> {
+    let shell_pathname: String = match shell_name {
+        Some(name) => name,
+        None => map_err!(env::var("SHELL"), "$SHELL is not set")?,
+    };
     if let Some(file_name) = PathBuf::from(&shell_pathname).file_name() {
         let file_name_str = file_name.to_string_lossy();
         match file_name_str.as_ref() {
