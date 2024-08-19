@@ -3,10 +3,18 @@ use mio::{Events, Interest, Poll, Token};
 use nix::fcntl::{fcntl, open, FcntlArg, OFlag};
 use nix::libc::{ioctl, winsize, TIOCGWINSZ, TIOCSWINSZ};
 use nix::pty::*;
-use nix::sys::termios::{self, SetArg, Termios};
+use nix::sys::signal::Signal;
+use nix::sys::termios::{self, LocalFlags, SetArg, Termios};
 use nix::unistd::*;
+use procfs::process::Process;
+use signal_hook::consts::signal;
+use signal_hook::iterator::Signals;
 use std::io::Stdin;
 use std::os::fd::{AsFd, AsRawFd};
+use std::thread;
+
+use crate::map_err;
+use crate::util;
 
 pub fn open_pty() -> (PtyMaster, String) {
     // Open a new PTY master and get the file descriptor
@@ -81,6 +89,51 @@ pub fn setup_parent_pty(parent_fd: &PtyMaster, stdin_fd: &Stdin) -> (Poll, Event
     return (poll, events);
 }
 
+fn get_tpgid(pid: i32) -> Result<i32, util::Error> {
+    // Open the process information using the PID
+    let process = map_err!(
+        Process::new(pid),
+        "Failed to read proc fs, this only works on linux"
+    )?;
+
+    // Retrieve the process status
+    let stat = map_err!(process.stat(), "")?;
+    return Ok(stat.tpgid);
+}
+
+fn pass_signal(child_pid: i32, sig: Signal) -> Result<(), util::Error> {
+    // NOTE that this assumes the tgpid of the child (shell) process is the pid/pgid of the foreground process.
+    let pgid = get_tpgid(child_pid)?;
+
+    // Send SIGINT to the child process
+    map_err!(nix::sys::signal::killpg(Pid::from_raw(pgid), sig), "Failed to send signal to child")?;
+    
+    return Ok(());
+}
+
+pub fn setup_signal_handlers(child_pid: i32) -> thread::JoinHandle<()> {
+    let mut signals = Signals::new(&[signal::SIGINT, signal::SIGTSTP, signal::SIGQUIT])
+        .expect("Failed to create signal handler");
+
+    let handler_thread = thread::spawn(move || {
+        for sig in signals.forever() {
+            match sig {
+                signal::SIGINT => {
+                    let _ = pass_signal(child_pid, Signal::SIGINT);
+                }
+                signal::SIGTSTP => {
+                    let _ = pass_signal(child_pid, Signal::SIGTSTP);
+                }
+                signal::SIGQUIT => {
+                    let _ = pass_signal(child_pid, Signal::SIGQUIT);
+                }
+                _ => unreachable!(),
+            }
+        }
+    });
+    return handler_thread;
+}
+
 pub fn set_raw_mode<Fd: AsFd>(fd: &Fd) -> Termios {
     let original_termios = termios::tcgetattr(fd).expect("Failed to get terminal attributes");
     let mut raw_termios = original_termios.clone();
@@ -89,6 +142,11 @@ pub fn set_raw_mode<Fd: AsFd>(fd: &Fd) -> Termios {
     // raw_termios.control_flags |= termios::ControlFlags::CS8;
     // raw_termios.local_flags &= !(LocalFlags::ECHO | LocalFlags::ICANON | LocalFlags::ISIG);
     termios::cfmakeraw(&mut raw_termios);
+
+    // Enable the ISIG flag to allow signal generation (e.g., Control-C for SIGINT)
+    // We handle and pass in those signals manually, to ensure they aren't effected by io load
+    raw_termios.local_flags.insert(LocalFlags::ISIG);
+
     termios::tcsetattr(fd, SetArg::TCSANOW, &raw_termios)
         .expect("Failed to set terminal to raw mode");
     original_termios

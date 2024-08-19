@@ -222,7 +222,9 @@ impl ShellProxy {
                     }
                 }
             }
-            Ok(_) => {}
+            Ok(_) => {
+                log::debug!("Nothing to read");
+            }
             Err(e) => return map_err!(Err(e), "Failed to read from stdin"),
         }
         Ok(())

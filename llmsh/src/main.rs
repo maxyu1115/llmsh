@@ -74,6 +74,9 @@ fn main() {
             // Set terminal to raw mode
             let original_termios = pty::set_raw_mode(&stdin_fd);
 
+            // setup the signal handlers, e.g. for passing through SIGINTs
+            let _ = pty::setup_signal_handlers(child.as_raw());
+
             let mut shell_proxy =
                 shell_creator.create_proxy(client, parent_fd, stdin_fd, stdout_fd);
 
@@ -133,6 +136,26 @@ fn main() {
                 execvpe(&shell_path, &args, &env_vars),
                 "Failed to execute shell"
             );
+
+            // let temp_filename = temp_rc.path().as_os_str().to_str().unwrap();
+            // let args: [_; 10] = [
+            //     CString::new("strace").unwrap(),
+            //     CString::new("-f").unwrap(),
+            //     CString::new("-o").unwrap(),
+            //     CString::new("strace.out").unwrap(),
+            //     CString::new("-e").unwrap(),
+            //     CString::new("signal=SIGINT").unwrap(),
+            //     CString::new("--").unwrap(),
+            //     shell_path.clone(),
+            //     CString::new("--rcfile").unwrap(),
+            //     CString::new(temp_filename).unwrap(),
+            // ];
+
+            // // Convert to the right format, then pass into the shell
+            // expect!(
+            //     execvpe(&CString::new("strace").unwrap(), &args, &env_vars),
+            //     "Failed to execute shell"
+            // );
         }
     }
 }
@@ -150,6 +173,7 @@ fn safe_handle_terminal(
     let mut retry_counter = 0;
 
     loop {
+        log::debug!("polling for events");
         match poll.poll(&mut events, None) {
             Ok(()) => {
                 retry_counter = 0;
@@ -185,6 +209,7 @@ fn safe_handle_terminal(
                     }
                 }
                 pty::STDIN_TOK => {
+                    log::debug!("Input Event");
                     shell_proxy.handle_input()?;
                 }
                 _ => unreachable!(),
