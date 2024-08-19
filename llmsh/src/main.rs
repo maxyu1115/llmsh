@@ -8,6 +8,7 @@ use std::env;
 use std::ffi::CString;
 use std::fs::File;
 use std::io::Write;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use tempfile::NamedTempFile;
@@ -75,7 +76,11 @@ fn main() {
             let original_termios = pty::set_raw_mode(&stdin_fd);
 
             // setup the signal handlers, e.g. for passing through SIGINTs
-            let _ = pty::setup_signal_handlers(child.as_raw());
+            let _ = pty::setup_signal_handlers(
+                parent_fd.as_raw_fd(),
+                stdin_fd.as_raw_fd(),
+                child.as_raw(),
+            );
 
             let mut shell_proxy =
                 shell_creator.create_proxy(client, parent_fd, stdin_fd, stdout_fd);
@@ -160,7 +165,7 @@ fn main() {
     }
 }
 
-const MAX_EINTR_RETRY: u32 = 2;
+const MAX_EINTR_RETRY: u32 = 10;
 
 // This function should never panic
 fn safe_handle_terminal(
@@ -179,14 +184,15 @@ fn safe_handle_terminal(
                 retry_counter = 0;
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {
-                // we seem to be only seeing this error after integrating reedline...
-                // TODO: properly debug this issue
+                // We get interrupted errors when we poll while the child process is handling an interrupt
+                // Retry up to MAX_EINTR_RETRY times with minor delays in between
                 if retry_counter < MAX_EINTR_RETRY {
                     log::warn!(
                         "Failed to poll event due to io::ErrorKind::Interrupted, retry counter {}",
                         retry_counter
                     );
                     retry_counter += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(100));
                     continue;
                 } else {
                     return map_err!(

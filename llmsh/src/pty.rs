@@ -80,11 +80,8 @@ pub fn setup_parent_pty(parent_fd: &PtyMaster, stdin_fd: &Stdin) -> (Poll, Event
         .register(&mut SourceFd(&raw_stdin_fd), STDIN_TOK, Interest::READABLE)
         .expect("Failed to register stdin_fd");
 
-    // Get the current terminal size
-    let ws = get_terminal_size(raw_stdin_fd);
-
-    // Set the terminal size of the PTY
-    set_terminal_size(raw_parent_fd, &ws);
+    // Sync the current terminal size
+    sync_terminal_size(raw_parent_fd, raw_stdin_fd);
 
     return (poll, events);
 }
@@ -106,26 +103,46 @@ fn pass_signal(child_pid: i32, sig: Signal) -> Result<(), util::Error> {
     let pgid = get_tpgid(child_pid)?;
 
     // Send SIGINT to the child process
-    map_err!(nix::sys::signal::killpg(Pid::from_raw(pgid), sig), "Failed to send signal to child")?;
-    
+    map_err!(
+        nix::sys::signal::killpg(Pid::from_raw(pgid), sig),
+        "Failed to send signal to child"
+    )?;
+
     return Ok(());
 }
 
-pub fn setup_signal_handlers(child_pid: i32) -> thread::JoinHandle<()> {
-    let mut signals = Signals::new(&[signal::SIGINT, signal::SIGTSTP, signal::SIGQUIT])
-        .expect("Failed to create signal handler");
+pub fn setup_signal_handlers(
+    parent_fd: i32,
+    child_fd: i32,
+    child_pid: i32,
+) -> thread::JoinHandle<()> {
+    let mut signals = Signals::new(&[
+        signal::SIGINT,
+        signal::SIGTSTP,
+        signal::SIGQUIT,
+        signal::SIGWINCH,
+    ])
+    .expect("Failed to create signal handler");
 
     let handler_thread = thread::spawn(move || {
         for sig in signals.forever() {
+            log::info!("Received and handling signal {}", sig);
             match sig {
+                // Control + C
                 signal::SIGINT => {
                     let _ = pass_signal(child_pid, Signal::SIGINT);
                 }
+                // Control + Z
                 signal::SIGTSTP => {
                     let _ = pass_signal(child_pid, Signal::SIGTSTP);
                 }
+                // Control + \
                 signal::SIGQUIT => {
                     let _ = pass_signal(child_pid, Signal::SIGQUIT);
+                }
+                // terminal size adjustment
+                signal::SIGWINCH => {
+                    sync_terminal_size(parent_fd, child_fd);
                 }
                 _ => unreachable!(),
             }
@@ -180,4 +197,12 @@ fn set_terminal_size(fd: i32, ws: &winsize) {
             panic!("Failed to set terminal window size");
         }
     }
+}
+
+fn sync_terminal_size(parent_fd: i32, child_fd: i32) {
+    // Get the current terminal size
+    let ws = get_terminal_size(child_fd);
+
+    // Set the terminal size of the PTY
+    set_terminal_size(parent_fd, &ws);
 }
