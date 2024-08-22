@@ -1,5 +1,8 @@
+jinja2
 pydantic
+pyyaml
 pyzmq
+
 transformers
 # for some reason seeing vllm crash wsl upon exit in higher versions...
 vllm==0.5.3

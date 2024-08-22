@@ -5,9 +5,7 @@ from hermitd.bot import Bot
 import hermitd.config as config
 import hermitd.messages as messages
 from hermitd.llm import LLMFactory, SingletonLLMFactory, SupportedLLMs
-from hermitd.llm.claude import Claude35Sonnet
-from hermitd.llm.gpt import GPT4oMini
-from hermitd.llm.llama3 import Llama3
+
 
 HERMITD_IPC_ENDPOINT = "ipc:///tmp/hermitd-ipc"
 MAX_SESSIONS = 16
@@ -101,15 +99,25 @@ class Hermitd:
 
 
 def get_llm_provider(cfg: config.Config, secrets: config.Secrets) -> LLMFactory:
+    # Only import based on which model is configured
     if (not cfg.llm) or (cfg.llm == SupportedLLMs.Llama3):
+        from hermitd.llm.llama3 import Llama3
+
         return SingletonLLMFactory(Llama3())
+
     elif cfg.llm == SupportedLLMs.Claude:
         if not secrets.anthropic:
             raise ValueError("Specified claude but did not set an Anthropic API key")
+
+        from hermitd.llm.claude import Claude35Sonnet
+
         return SingletonLLMFactory(Claude35Sonnet(secrets.anthropic))
+
     elif cfg.llm == SupportedLLMs.GPT:
         if not secrets.openai:
             raise ValueError("Specified gpt but did not set an OpenAI API key")
+
+        from hermitd.llm.gpt import GPT4oMini
         import openai
 
         openai.api_key = secrets.openai

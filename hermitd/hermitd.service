@@ -1,0 +1,14 @@
+[Unit]
+Description=llm powered shell assistant hermitd
+After=network.target
+
+[Service]
+Type=exec
+PIDFile=/run/hermitd.pid
+ProtectSystem=full
+ReadOnlyPaths=/
+ExecStart=hermitd -c /etc/hermitd.conf
+EnvironmentFile=-/etc/hermitd/env
+
+[Install]
+WantedBy=multi-user.target

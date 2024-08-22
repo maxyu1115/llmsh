@@ -1,0 +1,2 @@
+# llm: anthr-claude-3.5/openai-gpt-4o-mini/local-llama-8b
+llm: {{model}}
