@@ -2,6 +2,8 @@ from enum import Enum
 from typing import Literal, Final
 from pydantic import BaseModel
 
+API_VERSION: Final[str] = "0.1"
+
 # Alive messages
 ALIVE_REQ: Final[str] = ""
 ALIVE_RESP: Final[str] = "Ack"
@@ -16,6 +18,7 @@ class HermitRequest(BaseModel):
 class Setup(HermitRequest):
     type: Literal["Setup"]
     user: str
+    api_version: str
 
 
 class GenerateCommand(HermitRequest):

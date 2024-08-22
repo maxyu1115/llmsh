@@ -45,6 +45,11 @@ class Hermitd:
 
         if message_type == "Setup":
             msg = messages.Setup(**data)
+            if msg.api_version != messages.API_VERSION:
+                return messages.Error(
+                    type="Error",
+                    status=f"API version mismatch, hermitd is using {messages.API_VERSION}, while llmsh is using {msg.api_version}. Please update one of them to be in sync",
+                )
             session_id = self.create_session(msg.user)
             return messages.SetupSuccess(
                 type="SetupSuccess", session_id=session_id, motd=MOTD

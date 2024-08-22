@@ -19,6 +19,7 @@ pub enum ShellOutputType {
 enum Request {
     Setup {
         user: String,
+        api_version: String,
     },
     GenerateCommand {
         session_id: u32,
@@ -45,6 +46,7 @@ enum Response {
 }
 
 const HERMITD_ENDPOINT: &str = "ipc:///tmp/hermitd-ipc";
+const HERMITD_API_VERSION: &str = "0.1";
 
 const ALIVE_MSG: &str = "";
 const ALIVE_RESP: &str = "Ack";
@@ -122,7 +124,10 @@ impl HermitdClient {
 
     fn setup_session(socket: &zmq::Socket) -> Result<(u32, String), util::Error> {
         let user: String = map_err!(env::var("USER"), "$USER is not set")?;
-        let setup_request = Request::Setup { user };
+        let setup_request = Request::Setup {
+            user,
+            api_version: HERMITD_API_VERSION.to_string(),
+        };
         let reply = HermitdClient::send_msg(socket, setup_request, 1000)?;
         match reply {
             Response::SetupSuccess { session_id, motd } => Ok((session_id, motd)),

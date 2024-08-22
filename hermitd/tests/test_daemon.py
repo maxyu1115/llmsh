@@ -60,13 +60,20 @@ def test_malformed_ipc(patched_hermitd):
 
 
 def test_handle_setup_message(patched_hermitd):
-    data = {"type": "Setup", "user": "test_user"}
+    data = {"type": "Setup", "user": "test_user", "api_version": messages.API_VERSION}
     response = patched_hermitd.handle_message(data)
 
     assert isinstance(response, messages.SetupSuccess)
     assert response.session_id < MAX_SESSIONS
 
     assert patched_hermitd.llm_provider.is_called()
+
+
+def test_handle_setup_message(patched_hermitd):
+    data = {"type": "Setup", "user": "test_user", "api_version": "???"}
+    response = patched_hermitd.handle_message(data)
+
+    assert isinstance(response, messages.Error)
 
 
 def test_handle_generate_command(mock_bot, patched_hermitd):
