@@ -1,11 +1,18 @@
 # hermitd
-hermitd is the hermit crab living inside the shell, and just like a hermit, can give you useful suggestions :D
+`hermitd` is the hermit crab living inside the shell, and just like a hermit, can give you useful suggestions :D
 
-## Getting Started
-I recommend setting up a virtual environment using `python3 -m venv .venv`. 
+In all seriousness, `hermitd` is your llm-powered assistant/copilot to use with your shell. 
 
-Run `pip install -r requirements.txt` to install all the needed dependencies.
+**NOTE**: `hermitd` is designed to be used along with `llmsh`, where `llmsh` wraps a shell of your choice (bash, csh, etc).
 
-Currently run using `python3 -m hermitd`.
+## Installation
+You can install hermitd directly using 
+```shell
+pip install hermitd
+```
+Then you can install hermitd as a systemd service using
+```shell
+sudo hermitd-install
+```
 
-Also remember to run `black hermitd/` before commits.
+NOTE: as an alternative you can run directly using `OPENAI_API_KEY=xxx python3 hermitd -c <config-file>` or `ANTHROPIC_API_KEY=xxx python3 hermitd -c <config-file>`.
