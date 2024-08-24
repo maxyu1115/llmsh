@@ -5,8 +5,7 @@
 
 `llmsh` is also intended to provide an extremely convenient way to interact with a LLM.
 
-On a high level this is how things work:
-![image](architecture_overview.jpg)
+![image](quick-demo.gif)
 
 ## Setup
 After cloning,
@@ -35,3 +34,22 @@ This will wrap `$SHELL`. Or if you have a specific shell like `bash` in mind, ru
 ```shell
 llmsh bash
 ```
+
+## Architecture
+On a high level this is how things work:
+![image](architecture_overview.jpg)
+
+Essentially `llmsh` uses a Pseudo Terminal to run a shell in it's child process, similar to how ssh operates. It then parses the user's shell interactions, and sends it to `hermitd` for context to augment llm generation. 
+
+This was also the main reason `hermitd` takes the form of a daemon, compared to a server. `hermitd` was designed to always run on the same machine as `llmsh`, and if users run with a local llm, user's usage data should never leave your desktop.
+
+**Also note that `llmsh` does not record keystrokes. It only sends hermitd what the terminal DISPLAYS, rather than what users input. So you don't need to worry about `llmsh` logging your passwords**
+
+## Limitations
+Currently this project only supports Linux and bash, due to how `llmsh` relies on OS specific ways to interact with the PTY, as well as shell specific ways to parse the output from the shell.
+
+Because `llmsh` used the `nix` crate extensively, MacOS should be relatively easy to support. Windows on the other hand is a different beast, worst case we will need to rewrite llmsh just to support windows.
+
+Shells similar to bash should be easy to support, other shells that are too different may face challenges. 
+
+Contributions are incredibly welcome!

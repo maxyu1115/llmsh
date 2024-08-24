@@ -22,3 +22,14 @@ Command to build wheels:
 ```shell
 python3 -m build --wheel
 ```
+
+## Uploading
+After running `python3 -m build`, then run 
+```shell
+twine upload dist/hermitd-<version>.tar.gz dist/hermitd-<version>-py3-none-any.whl
+```
+
+For test.pypi:
+```shell
+twine upload --repository testpypi dist/hermitd-<version>.tar.gz dist/hermitd-<version>-py3-none-any.whl
+```
