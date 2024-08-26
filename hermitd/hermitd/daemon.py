@@ -16,9 +16,9 @@ ILLEGAL_IPC_ERROR = messages.Error(
 )
 
 
-MOTD = """Welcome to llmsh! I am the llm-powered hermit living in your shell, here to assist you. 
+MOTD = """Welcome to llmsh! I am the llm-powered hermit living in your shell, here to assist you.
 llmsh is simply a wrapper around your favorite shell specified in $SHELL, and is intended to work just like your shell.
-If you want to ask for my help, type `:` as the first character on the prompt line. 
+If you want to ask for my help, type `:` as the first character on the prompt line.
 (Currently due to technical difficulties, clear out a line and then typing `:` will not work)
 """
 
@@ -48,7 +48,8 @@ class Hermitd:
             if msg.api_version != messages.API_VERSION:
                 return messages.Error(
                     type="Error",
-                    status=f"API version mismatch, hermitd is using {messages.API_VERSION}, while llmsh is using {msg.api_version}. Please update one of them to be in sync",
+                    status=f"API version mismatch, hermitd is using {messages.API_VERSION}"
+                    f", while llmsh is using {msg.api_version}. Please update one of them to be in sync",
                 )
             session_id = self.create_session(msg.user)
             return messages.SetupSuccess(
@@ -87,7 +88,7 @@ class Hermitd:
         try:
             data = json.loads(message)
             reply = self.handle_message(data)
-        except json.JSONDecodeError as err:
+        except json.JSONDecodeError:
             reply = ILLEGAL_IPC_ERROR
         except Exception as err:
             traceback.print_exception(err)

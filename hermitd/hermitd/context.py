@@ -7,7 +7,7 @@ IGNORED_TYPES = {ShellOutputType.Header}
 
 class Context:
     PROMPT_HEADER = textwrap.dedent(
-        """For context, here are some of the user's shell usage history. The user's inputs to the shell is after 
+        """For context, here are some of the user's shell usage history. The user's inputs to the shell is after
         \"User Input:\", and the shell's output in response to user input is after \"Shell Output:\". Sometimes
         the user will abort their shell prompt using control C, and that likely means their aborted command is
         relevant their intentions but is not exactly what they want. Now here are the user's shell history:\n
