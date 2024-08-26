@@ -1,12 +1,13 @@
 import dataclasses
 import os
+from typing import Optional
 import yaml
 from hermitd.llm import SupportedLLMs
 
 
 @dataclasses.dataclass
 class Config:
-    llm: SupportedLLMs | None
+    llm: Optional[SupportedLLMs]
 
 
 def _read_config(loaded_yaml):
@@ -28,8 +29,8 @@ def read_config(config_path):
 
 @dataclasses.dataclass
 class Secrets:
-    anthropic: str | None
-    openai: str | None
+    anthropic: Optional[str]
+    openai: Optional[str]
 
 
 def read_api_keys() -> Secrets:
