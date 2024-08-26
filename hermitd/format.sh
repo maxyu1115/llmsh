@@ -1,4 +1,3 @@
 #!/bin/sh
 
-black hermitd/*.py
-black tests/*.py
+black $@ hermitd/**/*.py hermitd/*.py tests/**/*.py tests/*.py

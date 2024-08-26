@@ -3,13 +3,5 @@ pydantic
 pyyaml
 pyzmq
 
-transformers
-# for some reason seeing vllm crash wsl upon exit in higher versions...
-vllm==0.5.3
-
 openai
 anthropic
-
-# development
-black
-pytest
