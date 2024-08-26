@@ -12,5 +12,5 @@ def test_supported_llms():
 
 
 def test_supported_llms_not_supported():
-    with pytest.raises(ValueError) as err:
+    with pytest.raises(ValueError):
         llm.SupportedLLMs.from_tag("illegal name??")

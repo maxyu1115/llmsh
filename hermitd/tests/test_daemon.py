@@ -1,7 +1,6 @@
 import json
 import pytest
 from unittest.mock import MagicMock, patch
-import zmq
 import hermitd.messages as messages
 from hermitd.daemon import Hermitd, MAX_SESSIONS
 
@@ -69,7 +68,7 @@ def test_handle_setup_message(patched_hermitd):
     assert patched_hermitd.llm_provider.is_called()
 
 
-def test_handle_setup_message(patched_hermitd):
+def test_handle_setup_bad_api_version(patched_hermitd):
     data = {"type": "Setup", "user": "test_user", "api_version": "???"}
     response = patched_hermitd.handle_message(data)
 
@@ -88,7 +87,7 @@ def test_handle_generate_command(mock_bot, patched_hermitd):
     assert response.command == answer
 
 
-def test_handle_generate_command(mock_bot, patched_hermitd):
+def test_handle_generate_command_after_exit(mock_bot, patched_hermitd):
     # init session
     session_id = patched_hermitd.create_session("test_user")
     exit_data = {"type": "Exit", "session_id": session_id}

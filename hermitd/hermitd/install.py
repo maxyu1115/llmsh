@@ -114,7 +114,8 @@ def prompt_user():
 
     if selected_llm.host == ModelHost.Local:
         print(
-            "Currently hermitd doesn't officially support local llm runs yet. If you're interested, please check out our github for the developer setup. "
+            "Currently hermitd doesn't officially support local llm runs yet."
+            "If you're interested, please check out our github for the developer setup. "
         )
         exit(1)
     else:
