@@ -58,6 +58,7 @@ impl<S: Copy + PartialEq + Eq + Hash + std::fmt::Debug, E: Copy> BufferParser<S,
             self.state,
             self.input_buffer
         );
+        // TODO: refactor to look at all conditions at once and transition based on earliest match
         for (condition, state, event) in &self.state_map[&self.state] {
             match condition {
                 TransitionCondition::StringID(identifier, visible) => {

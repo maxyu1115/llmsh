@@ -2,7 +2,7 @@ from enum import Enum
 from typing import Literal, Final
 from pydantic import BaseModel
 
-API_VERSION: Final[str] = "0.1"
+API_VERSION: Final[str] = "0.1a"
 
 # Alive messages
 ALIVE_REQ: Final[str] = ""
@@ -72,4 +72,5 @@ class SetupSuccess(HermitResponse):
 
 class CommandResponse(HermitResponse):
     type: Literal["CommandResponse"]
-    command: str
+    full_response: str
+    commands: list[str]

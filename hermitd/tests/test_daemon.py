@@ -76,15 +76,17 @@ def test_handle_setup_bad_api_version(patched_hermitd):
 
 
 def test_handle_generate_command(mock_bot, patched_hermitd):
-    answer = "bye"
-    mock_bot.generate_command.return_value = answer
+    resp = "bye"
+    commands = []
+    mock_bot.generate_command.return_value = (resp, commands)
     # init session
     session_id = patched_hermitd.create_session("test_user")
     data = {"type": "GenerateCommand", "prompt": "hey", "session_id": session_id}
 
     response = patched_hermitd.handle_message(data)
     assert isinstance(response, messages.CommandResponse)
-    assert response.command == answer
+    assert response.full_response == resp
+    assert response.commands == commands
 
 
 def test_handle_generate_command_after_exit(mock_bot, patched_hermitd):

@@ -1,5 +1,4 @@
 use core::panic;
-use log::debug;
 use nix::pty;
 use nix::unistd;
 use reedline::{DefaultPrompt, DefaultPromptSegment, Reedline, Signal};
@@ -55,8 +54,7 @@ trait ShellOutputParser {
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 enum ShellInputState {
     Undetermined, // Start of the input when it can be both
-    HermitPrompt,
-    HermitFollowup,
+    HermitInput,  // State for interacting with hermitd, not managed through this state machine
     ShellPrompt,
     Idle, // when not in the input flow
 }
@@ -69,12 +67,12 @@ pub struct ShellProxy {
     io_buffer: [u8; 4096],
     input_parser: ShellInputStateMachine,
     output_parser: Box<dyn ShellOutputParser>,
+    input_rl: Reedline,
+    rl_prompt: DefaultPrompt,
 }
 
 struct ShellInputStateMachine {
     state: ShellInputState,
-    input_rl: Reedline,
-    rl_prompt: DefaultPrompt,
 }
 
 enum ShellInputTarget {
@@ -93,11 +91,6 @@ impl ShellInputStateMachine {
     fn new() -> ShellInputStateMachine {
         ShellInputStateMachine {
             state: ShellInputState::Idle,
-            input_rl: Reedline::create(),
-            rl_prompt: DefaultPrompt::new(
-                DefaultPromptSegment::Basic(HERMITD_PROMPT_HEADER.to_string()),
-                DefaultPromptSegment::Empty,
-            ),
         }
     }
 
@@ -124,25 +117,15 @@ impl ShellInputStateMachine {
         Ok(())
     }
 
-    fn _handle_hermit_prompt(&mut self) -> ShellInputActions {
-        let mut ret: ShellInputActions = Vec::with_capacity(2);
-
-        let sig = self.input_rl.read_line(&self.rl_prompt);
-        match sig {
-            Ok(Signal::Success(buffer)) => {
-                ret.push((ShellInputTarget::Hermit, buffer.as_bytes().to_vec()));
-            }
-            Ok(Signal::CtrlD) | Ok(Signal::CtrlC) => {}
-            err => {
-                log::error!("Unknown error during handling hermitd prompt: {:?}", err);
-            }
+    fn finish_hermit_inputs(&mut self) -> Result<(), util::Error> {
+        if self.state != ShellInputState::HermitInput {
+            illegal_state!(format!(
+                "Tried calling finish_hermit_inputs in state {:?} instead",
+                self.state
+            ));
         }
-
-        // After the hermit dialog, input a newline to refresh things
-        ret.push((ShellInputTarget::Pty, vec![b'\r']));
-        //
         self.state = ShellInputState::ShellPrompt;
-        return ret;
+        Ok(())
     }
 
     fn _handle_shell_prompt(&self, input: &[u8]) -> ShellInputActions {
@@ -151,8 +134,8 @@ impl ShellInputStateMachine {
 
     fn _handle_undetermined(&mut self, input: &[u8]) -> ShellInputActions {
         if input.contains(&b':') {
-            self.state = ShellInputState::HermitPrompt;
-            return self._handle_hermit_prompt();
+            self.state = ShellInputState::HermitInput;
+            return vec![(ShellInputTarget::Hermit, Vec::new())];
         } else {
             self.state = ShellInputState::ShellPrompt;
             return self._handle_shell_prompt(input);
@@ -162,16 +145,15 @@ impl ShellInputStateMachine {
     fn handle_input(&mut self, input: &[u8]) -> ShellInputActions {
         match self.state {
             ShellInputState::Undetermined => self._handle_undetermined(input),
-            ShellInputState::HermitPrompt => panic!(),
-            ShellInputState::HermitFollowup => todo!(),
+            ShellInputState::HermitInput => panic!(),
             ShellInputState::ShellPrompt => self._handle_shell_prompt(input),
             ShellInputState::Idle => vec![(ShellInputTarget::PassThrough, Vec::new())],
         }
     }
 }
 
-pub fn hermit_print(stdout_fd: &mut Stdout, message: &String) -> Result<(), util::Error> {
-    let wrapped_message = format!("{}{}", HERMITD_RESP_HEADER, message).into_bytes();
+pub fn hermit_print(stdout_fd: &mut Stdout, message: &str) -> Result<(), util::Error> {
+    let wrapped_message = format!("{}{}\n", HERMITD_RESP_HEADER, message).into_bytes();
 
     map_err!(
         stdout_fd.write_all(&util::fix_newlines(wrapped_message)),
@@ -182,8 +164,134 @@ pub fn hermit_print(stdout_fd: &mut Stdout, message: &String) -> Result<(), util
 }
 
 impl ShellProxy {
-    fn _hermit_print(&mut self, message: &String) -> Result<(), util::Error> {
+    fn _hermit_print(&mut self, message: &str) -> Result<(), util::Error> {
         return hermit_print(&mut self.stdout_fd, message);
+    }
+
+    fn _hermit_map_err<T, E>(&mut self, res: Result<T, E>, msg: &str) -> Option<T> {
+        match res {
+            Ok(value) => {
+                return Some(value);
+            }
+            Err(_) => {
+                let _ = self._hermit_print(msg);
+                return None;
+            }
+        }
+    }
+
+    fn _handle_hermit_prompt(&mut self) -> Result<Option<String>, util::Error> {
+        let result = self.input_rl.read_line(&self.rl_prompt);
+        let signal = map_err!(result, "Unknown error during handling hermitd prompt")?;
+        match signal {
+            Signal::Success(input) => {
+                return Ok(Some(input));
+            }
+            Signal::CtrlD | Signal::CtrlC => return Ok(None),
+        }
+    }
+
+    fn _handle_hermit_selection(
+        &mut self,
+        commands: &Vec<String>,
+    ) -> Result<Option<String>, util::Error> {
+        if commands.len() == 0 {
+            return Ok(None);
+        }
+        let command_choices_message: String = commands
+            .iter()
+            .enumerate()
+            .map(|(i, s)| format!("[{}] `{}`", i, s))
+            .collect::<Vec<String>>()
+            .join("\n");
+        self._hermit_print(&format!(
+            "To run a suggested command from hermitd, type one of the following: \n{}",
+            command_choices_message
+        ))?;
+        let result = self.input_rl.read_line(&self.rl_prompt);
+        let signal = map_err!(result, "Unknown error during handling hermitd prompt")?;
+        match signal {
+            Signal::Success(input) => {
+                let trimmed_input = input.trim();
+                let mut selection: usize = 0;
+                if trimmed_input != "" {
+                    let selection_raw: Result<usize, _> = trimmed_input.parse();
+                    selection = match selection_raw {
+                        Ok(value) => value,
+                        Err(_) => {
+                            self._hermit_print("Please input a valid selection")?;
+                            return Ok(None);
+                        }
+                    };
+                }
+                if selection >= commands.len() {
+                    self._hermit_print("Please input a valid selection")?;
+                    return Ok(None);
+                }
+                return Ok(Some(commands[selection].clone()));
+            }
+            Signal::CtrlD | Signal::CtrlC => return Ok(None),
+        }
+    }
+
+    fn handle_hermit(&mut self) -> Result<String, util::Error> {
+        let prompt_option = self._handle_hermit_prompt()?;
+        if prompt_option.is_none() {
+            // input a new line so that we get a new shell line (and header)
+            return Ok("\r".to_string());
+        }
+        let prompt = prompt_option.unwrap();
+
+        let (response, commands) = self.hermit_client.generate_command(prompt)?;
+        self._hermit_print(&response)?;
+
+        let selection_option = self._handle_hermit_selection(&commands)?;
+        if selection_option.is_none() {
+            return Ok("\r".to_string());
+        }
+        let selection = selection_option.unwrap();
+        return Ok(format!("\r{}\r", selection));
+    }
+
+    fn handle_input_actions(
+        &mut self,
+        actions: ShellInputActions,
+        n: usize,
+    ) -> Result<(), util::Error> {
+        for (target, input) in actions {
+            match target {
+                ShellInputTarget::Stdout => {
+                    log::debug!("Attempting to write to stdout: {:?}", input);
+                    let mapped_input: Vec<u8> = util::fix_newlines(input);
+                    map_err!(
+                        self.stdout_fd.write_all(&mapped_input),
+                        "Failed to write to stdout"
+                    )?;
+                    map_err!(self.stdout_fd.flush(), "Failed to flush stdout")?;
+                }
+                ShellInputTarget::Hermit => {
+                    let hermit_pty_input = self.handle_hermit()?;
+                    self.input_parser.finish_hermit_inputs()?;
+                    map_err!(
+                        self.parent_fd.write_all(hermit_pty_input.as_bytes()),
+                        "Failed to write to parent_fd"
+                    )?;
+                }
+                ShellInputTarget::Pty => {
+                    map_err!(
+                        self.parent_fd.write_all(&input),
+                        "Failed to write to parent_fd"
+                    )?;
+                }
+                ShellInputTarget::PassThrough => {
+                    map_err!(
+                        self.parent_fd.write_all(&self.io_buffer[..n]),
+                        "Failed to write to parent_fd"
+                    )?;
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn handle_input(&mut self) -> Result<(), util::Error> {
@@ -191,36 +299,7 @@ impl ShellProxy {
         match n {
             Ok(n) if n > 0 => {
                 let actions = self.input_parser.handle_input(&self.io_buffer[..n]);
-                for (target, input) in actions {
-                    match target {
-                        ShellInputTarget::Stdout => {
-                            log::debug!("Attempting to write to stdout: {:?}", input);
-                            let mapped_input: Vec<u8> = util::fix_newlines(input);
-                            map_err!(
-                                self.stdout_fd.write_all(&mapped_input),
-                                "Failed to write to stdout"
-                            )?;
-                            map_err!(self.stdout_fd.flush(), "Failed to flush stdout")?;
-                        }
-                        ShellInputTarget::Hermit => {
-                            let prompt = String::from_utf8_lossy(&input).to_string();
-                            let recommended_cmd = self.hermit_client.generate_command(prompt)?;
-                            self._hermit_print(&recommended_cmd)?;
-                        }
-                        ShellInputTarget::Pty => {
-                            map_err!(
-                                self.parent_fd.write_all(&input),
-                                "Failed to write to parent_fd"
-                            )?;
-                        }
-                        ShellInputTarget::PassThrough => {
-                            map_err!(
-                                self.parent_fd.write_all(&self.io_buffer[..n]),
-                                "Failed to write to parent_fd"
-                            )?;
-                        }
-                    }
-                }
+                return self.handle_input_actions(actions, n);
             }
             Ok(_) => {
                 log::debug!("Nothing to read");
@@ -341,9 +420,10 @@ impl Bash {
         let input_end_marker: String = Uuid::new_v4().to_string() + "\n";
         let output_end_marker: String = Uuid::new_v4().to_string() + "\n";
 
-        debug!(
+        log::debug!(
             "Bash Input End Marker: [{}], Output End Marker: [{}]",
-            input_end_marker, output_end_marker
+            input_end_marker,
+            output_end_marker
         );
 
         return Bash {
@@ -412,6 +492,11 @@ impl ShellCreator for Bash {
             io_buffer: [0; 4096],
             input_parser,
             output_parser,
+            input_rl: Reedline::create(),
+            rl_prompt: DefaultPrompt::new(
+                DefaultPromptSegment::Basic(HERMITD_PROMPT_HEADER.to_string()),
+                DefaultPromptSegment::Empty,
+            ),
         }
     }
 }

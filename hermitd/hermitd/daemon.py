@@ -19,8 +19,8 @@ ILLEGAL_IPC_ERROR = messages.Error(
 MOTD = """Welcome to llmsh! I am the llm-powered hermit living in your shell, here to assist you.
 llmsh is simply a wrapper around your favorite shell specified in $SHELL, and is intended to work just like your shell.
 If you want to ask for my help, type `:` as the first character on the prompt line.
-(Currently due to technical difficulties, clear out a line and then typing `:` will not work)
-"""
+(Currently due to technical difficulties, clear out a line and then typing `:` will not work. Use ENTER or Ctrl+C \
+instead)"""
 
 
 class Hermitd:
@@ -66,8 +66,10 @@ class Hermitd:
 
         if message_type == "GenerateCommand":
             msg = messages.GenerateCommand(**data)
-            cmd = session.generate_command(msg.prompt)
-            return messages.CommandResponse(type="CommandResponse", command=cmd)
+            resp, commands = session.generate_command(msg.prompt)
+            return messages.CommandResponse(
+                type="CommandResponse", full_response=resp, commands=commands
+            )
         elif message_type == "SaveContext":
             msg = messages.SaveContext(**data)
             session.save_context(msg.context_type, msg.context)

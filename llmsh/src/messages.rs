@@ -38,15 +38,23 @@ enum Request {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
 enum Response {
-    SetupSuccess { session_id: u32, motd: String },
-    CommandResponse { command: String },
-    Error { status: String },
+    SetupSuccess {
+        session_id: u32,
+        motd: String,
+    },
+    CommandResponse {
+        full_response: String,
+        commands: Vec<String>,
+    },
+    Error {
+        status: String,
+    },
     // generic success message, used for apis we only care about success vs failure
     Success,
 }
 
 const HERMITD_ENDPOINT: &str = "ipc:///tmp/hermitd-ipc";
-const HERMITD_API_VERSION: &str = "0.1";
+const HERMITD_API_VERSION: &str = "0.1a";
 
 const ALIVE_MSG: &str = "";
 const ALIVE_RESP: &str = "Ack";
@@ -165,15 +173,18 @@ impl HermitdClient {
         }
     }
 
-    pub fn generate_command(&self, prompt: String) -> Result<String, util::Error> {
+    pub fn generate_command(&self, prompt: String) -> Result<(String, Vec<String>), util::Error> {
         let gen_request = Request::GenerateCommand {
             session_id: self.session_id,
             prompt,
         };
         let reply = HermitdClient::send_msg(&self.socket, gen_request, 10000)?;
         match reply {
-            Response::CommandResponse { command } => {
-                return Ok(command);
+            Response::CommandResponse {
+                full_response,
+                commands,
+            } => {
+                return Ok((full_response, commands));
             }
             Response::Error { status } => {
                 return Err(util::Error::HermitFailed(status));
