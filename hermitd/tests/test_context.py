@@ -30,6 +30,18 @@ from hermitd.messages import ShellOutputType
                 [(ShellOutputType.Input, "3")],
             ],
         ),
+        (
+            [
+                (None, "0"),
+                (ShellOutputType.Input, "1"),
+                (None, "0"),
+                (ShellOutputType.Output, "2"),
+                (None, "0"),
+            ],
+            [
+                [(ShellOutputType.Input, "01"), (ShellOutputType.Output, "02")],
+            ],
+        ),
     ],
 )
 def test_save_shell_context(input, expected_output):

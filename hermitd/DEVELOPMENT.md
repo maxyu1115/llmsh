@@ -13,7 +13,7 @@ Or you can run `OPENAI_API_KEY=xxx python3 hermitd -c hermitd.conf.remote.sample
 ## Style
 Remember to run `source format.sh` before commits.
 
-Then run `flake8 hermitd tests` to lint your code.
+Then run `source check.sh` to lint your code.
 
 ## Builds
 First install the latest version of `pip install --upgrade build`

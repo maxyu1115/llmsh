@@ -30,7 +30,6 @@ pub enum ParsedOutput {
     Output {
         output_type: ShellOutputType,
         step: Vec<u8>,
-        aggregated: Vec<u8>,
     },
 }
 
@@ -318,15 +317,15 @@ impl ShellProxy {
                 let parsed_outputs = self.output_parser.parse_output(&self.io_buffer[..n]);
                 for out in parsed_outputs {
                     match out {
-                        ParsedOutput::InProgress(s) => {
+                        ParsedOutput::InProgress(step) => {
                             // Write data from parent PTY to stdout
-                            map_err!(self.stdout_fd.write_all(&s), "Failed to write to stdout")?;
+                            map_err!(self.stdout_fd.write_all(&step), "Failed to write to stdout")?;
+                            let context = String::from_utf8_lossy(&step).to_string();
+                            log::debug!("Saving context, raw output: {}", context);
+                            let context = parsing::strip_ansi_escape_sequences(&context);
+                            self.hermit_client.save_context(None, context.to_string())?;
                         }
-                        ParsedOutput::Output {
-                            output_type,
-                            step,
-                            aggregated,
-                        } => {
+                        ParsedOutput::Output { output_type, step } => {
                             map_err!(self.stdout_fd.write_all(&step), "Failed to write to stdout")?;
                             match output_type {
                                 ShellOutputType::Header => {
@@ -337,11 +336,11 @@ impl ShellProxy {
                                 }
                                 _ => {}
                             }
-                            let context = String::from_utf8_lossy(&aggregated).to_string();
+                            let context = String::from_utf8_lossy(&step).to_string();
                             log::debug!("Saving context, raw output: {}", context);
                             let context = parsing::strip_ansi_escape_sequences(&context);
                             self.hermit_client
-                                .save_context(output_type, context.to_string())?;
+                                .save_context(Some(output_type), context.to_string())?;
                         }
                     }
                 }
@@ -567,14 +566,9 @@ impl ShellOutputParser for BashParser {
             .into_iter()
             .map(|ret| match ret {
                 parsing::StepResults::Echo(out) => ParsedOutput::InProgress(out),
-                parsing::StepResults::StateChange {
-                    event,
-                    step,
-                    aggregated,
-                } => ParsedOutput::Output {
+                parsing::StepResults::StateChange { event, step } => ParsedOutput::Output {
                     output_type: event,
                     step,
-                    aggregated,
                 },
             })
             .collect();
