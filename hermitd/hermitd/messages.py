@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Literal, Final
+from typing import Final, Literal, Optional
 from pydantic import BaseModel
 
 API_VERSION: Final[str] = "0.1a"
@@ -43,7 +43,7 @@ class SaveContext(HermitRequest):
     type: Literal["SaveContext"]
     session_id: int
     context: str
-    context_type: ShellOutputType
+    context_type: Optional[ShellOutputType]
 
 
 # Responses

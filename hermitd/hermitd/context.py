@@ -1,5 +1,6 @@
 from hermitd.messages import ShellOutputType
 import textwrap
+from typing import Optional
 
 
 IGNORED_TYPES = {ShellOutputType.Header}
@@ -22,12 +23,19 @@ class Context:
     def __init__(self) -> None:
         self.shell_ctx: list[list[(ShellOutputType, str)]] = []
         self.current_dialogue: list[(ShellOutputType, str)] = []
+        self.undecided_stack: list[str] = []
 
-    def save_shell_context(self, data_type: ShellOutputType, data: str):
+    def save_shell_context(self, data_type: Optional[ShellOutputType], data: str):
         if data_type in IGNORED_TYPES:
+            self.undecided_stack = []
             return
 
-        self.current_dialogue.append((data_type, data))
+        self.undecided_stack.append(data)
+        if data_type is None:
+            return
+
+        self.current_dialogue.append((data_type, "".join(self.undecided_stack)))
+        self.undecided_stack = []
 
         if data_type == ShellOutputType.Output:
             # each time we have an output, that marks the end of a "dialogue"

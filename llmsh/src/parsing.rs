@@ -8,11 +8,7 @@ use std::hash::Hash;
 #[derive(PartialEq, Debug)]
 pub enum StepResults<E: Copy> {
     Echo(Vec<u8>),
-    StateChange {
-        event: E,
-        step: Vec<u8>,
-        aggregated: Vec<u8>,
-    },
+    StateChange { event: E, step: Vec<u8> },
 }
 
 pub enum TransitionCondition {
@@ -30,6 +26,10 @@ pub struct BufferParser<S: Copy + PartialEq + Eq + Hash + std::fmt::Debug, E: Co
 
     // state -> (transition_condition, next_state, emitted_event)
     state_map: HashMap<S, Vec<(TransitionCondition, S, E)>>,
+
+    // length of input buffer we should retain when no match.
+    // This number should be enough to handle all transition conditions
+    max_history_length: usize,
 }
 
 impl<S: Copy + PartialEq + Eq + Hash + std::fmt::Debug, E: Copy> BufferParser<S, E> {
@@ -37,12 +37,30 @@ impl<S: Copy + PartialEq + Eq + Hash + std::fmt::Debug, E: Copy> BufferParser<S,
         state: S,
         state_map: HashMap<S, Vec<(TransitionCondition, S, E)>>,
     ) -> BufferParser<S, E> {
+        let max_history_length = 128;
+        Self::check_max_history_length(max_history_length, &state_map);
         return BufferParser {
             input_buffer: Vec::with_capacity(4096),
             parsed_length: 0,
             state,
             state_map,
+            max_history_length: 128,
         };
+    }
+
+    fn check_max_history_length(
+        max_history_length: usize,
+        state_map: &HashMap<S, Vec<(TransitionCondition, S, E)>>,
+    ) {
+        for (_, transitions) in state_map.iter() {
+            for (transition, _, _) in transitions {
+                match transition {
+                    TransitionCondition::StringID(identifier, _) => {
+                        assert!(identifier.len() < max_history_length);
+                    }
+                }
+            }
+        }
     }
 
     pub fn buffer(&mut self, input: &[u8]) {
@@ -58,69 +76,68 @@ impl<S: Copy + PartialEq + Eq + Hash + std::fmt::Debug, E: Copy> BufferParser<S,
             self.state,
             self.input_buffer
         );
-        // TODO: refactor to look at all conditions at once and transition based on earliest match
-        for (condition, state, event) in &self.state_map[&self.state] {
+
+        let transitions: &[(TransitionCondition, S, E)] = &self.state_map[&self.state];
+        let mut matches = vec![None; transitions.len()];
+        for (i, (condition, _, _)) in transitions.iter().enumerate() {
             match condition {
-                TransitionCondition::StringID(identifier, visible) => {
-                    log::debug!("Matching on identifier [{}]", identifier);
-                    // start at parsed_length - identifier_length to deal with wrap around cases
-                    let start = if self.parsed_length < identifier.len() {
-                        0
-                    } else {
-                        self.parsed_length - identifier.len()
-                    };
+                TransitionCondition::StringID(identifier, _) => {
+                    let start = self.parsed_length.saturating_sub(identifier.len());
                     let sub_slice = &self.input_buffer[start..];
                     // search for the identifier
-                    if let Some(i) = sub_slice
+                    matches[i] = sub_slice
                         .windows(identifier.len())
                         .position(|window| window == identifier.as_bytes())
-                    {
-                        let end = if *visible {
-                            start + i + identifier.len()
-                        } else {
-                            start + i
-                        };
-                        log::debug!(
-                            "Parsed length {}, identifier.len {}, start {}, i {}, end {}",
-                            self.parsed_length,
-                            identifier.len(),
-                            start,
-                            i,
-                            end
-                        );
-                        let step: Vec<u8> = if self.parsed_length < end {
-                            self.input_buffer[self.parsed_length..end].to_vec()
-                        } else {
-                            // there's a weird case where part of the (invisible) identifier was in the previous step
-                            // this causes the previously parsed_length to exceed the end. We output [] in this case
-                            vec![]
-                        };
-
-                        // transition successful everything prior to the marker gets outputted
-                        let aggregated: Vec<u8> = self.input_buffer.drain(..end).collect();
-                        // throw away the identifier if it shouldn't be visible
-                        if !*visible {
-                            self.input_buffer.drain(..identifier.len());
-                        }
-                        self.parsed_length = 0;
-                        self.state = *state;
-                        return Some(StepResults::StateChange {
-                            event: *event,
-                            step,
-                            aggregated,
-                        });
-                    } else {
-                        // if not found, try the next transition
-                        continue;
-                    }
+                        .map(|i| i + start);
                 }
             }
         }
-        let prev_len = self.parsed_length;
-        self.parsed_length = self.input_buffer.len();
-        return Some(StepResults::Echo(
-            self.input_buffer[prev_len..self.parsed_length].to_vec(),
-        ));
+
+        let best_match_option = find_smallest_present(&matches);
+
+        if let Some(best_match) = best_match_option {
+            let match_idx = matches[best_match].unwrap();
+            let (condition, state, event) = &transitions[best_match];
+            match condition {
+                TransitionCondition::StringID(identifier, visible) => {
+                    log::debug!("Matching on identifier [{}]", identifier);
+                    let end = if *visible {
+                        match_idx + identifier.len()
+                    } else {
+                        match_idx
+                    };
+                    let step: Vec<u8> = if self.parsed_length < end {
+                        self.input_buffer[self.parsed_length..end].to_vec()
+                    } else {
+                        // there's a weird case where part of the (invisible) identifier was in the previous step
+                        // this causes the previously parsed_length to exceed the end. We output [] in this case
+                        vec![]
+                    };
+
+                    // transition successful everything up to the marker gets drained
+                    self.input_buffer.drain(..match_idx + identifier.len());
+                    self.parsed_length = 0;
+                    self.state = *state;
+                    return Some(StepResults::StateChange {
+                        event: *event,
+                        step,
+                    });
+                }
+            }
+        } else {
+            // Everything starting from the previous parsed_length is echoed
+            // Note that self.parsed_length is not updated yet
+            let echo_vec = self.input_buffer[self.parsed_length..].to_vec();
+            // drain out everything only keeping self.max_history_length
+            self.input_buffer.drain(
+                ..self
+                    .input_buffer
+                    .len()
+                    .saturating_sub(self.max_history_length),
+            );
+            self.parsed_length = self.input_buffer.len();
+            return Some(StepResults::Echo(echo_vec));
+        }
     }
 
     pub fn parse(&mut self, input: &[u8]) -> Vec<StepResults<E>> {
@@ -136,6 +153,14 @@ impl<S: Copy + PartialEq + Eq + Hash + std::fmt::Debug, E: Copy> BufferParser<S,
         }
         return ret;
     }
+}
+
+fn find_smallest_present(vec: &Vec<Option<usize>>) -> Option<usize> {
+    vec.iter()
+        .enumerate()
+        .filter_map(|(idx, &opt)| opt.map(|val| (idx, val))) // keep only Some(usize) and map it to (index, value)
+        .min_by_key(|&(_, val)| val)
+        .map(|(idx, _)| idx)
 }
 
 lazy_static::lazy_static! {
@@ -246,16 +271,16 @@ mod tests {
 
     #[rstest]
     #[case("We transition using transition1 to state 1", vec![
-        StepResults::StateChange { event: 0, step: to_vec_u8("We transition using transition1"), aggregated: to_vec_u8("We transition using transition1") },
+        StepResults::StateChange { event: 0, step: to_vec_u8("We transition using transition1") },
         StepResults::Echo(to_vec_u8(" to state 1")),
     ])]
     #[case("transition0 doesn't work since we are on state 0", vec![
         StepResults::Echo(to_vec_u8("transition0 doesn't work since we are on state 0")),
     ])]
     #[case("transition1transition0transition1", vec![
-        StepResults::StateChange { event: 0, step: to_vec_u8("transition1"), aggregated: to_vec_u8("transition1") },
-        StepResults::StateChange { event: 1, step: to_vec_u8("transition0"), aggregated: to_vec_u8("transition0") },
-        StepResults::StateChange { event: 0, step: to_vec_u8("transition1"), aggregated: to_vec_u8("transition1") },
+        StepResults::StateChange { event: 0, step: to_vec_u8("transition1") },
+        StepResults::StateChange { event: 1, step: to_vec_u8("transition0") },
+        StepResults::StateChange { event: 0, step: to_vec_u8("transition1") },
     ])]
     fn test_buffer_parser_transition(#[case] input: &str, #[case] expected: Vec<StepResults<i32>>) {
         let mut parser = two_state_bidirection_parser("transition1", "transition0", true);
@@ -268,9 +293,9 @@ mod tests {
         StepResults::Echo(to_vec_u8("transition0 is visible")),
     ])]
     #[case("transition1transition0transition1", vec![
-        StepResults::StateChange { event: 0, step: vec![], aggregated: vec![] },
-        StepResults::StateChange { event: 1, step: vec![], aggregated: vec![] },
-        StepResults::StateChange { event: 0, step: vec![], aggregated: vec![] },
+        StepResults::StateChange { event: 0, step: vec![] },
+        StepResults::StateChange { event: 1, step: vec![] },
+        StepResults::StateChange { event: 0, step: vec![] },
     ])]
     fn test_buffer_parser_id_invisible(
         #[case] input: &str,
@@ -299,11 +324,21 @@ mod tests {
                 StepResults::StateChange {
                     event: 0,
                     step: vec![],
-                    aggregated: to_vec_u8("this input is segmented and ")
                 },
                 StepResults::Echo(to_vec_u8(" is split in half"))
             ]
         );
+    }
+
+    #[rstest]
+    #[case(vec![Some(2), Some(1), Some(4), None], Some(1))]
+    #[case(vec![Some(1), Some(1), Some(4), None], Some(0))]
+    #[case(vec![None, None, None], None)]
+    fn test_find_smallest_present(
+        #[case] input: Vec<Option<usize>>,
+        #[case] expected: Option<usize>,
+    ) {
+        assert_eq!(find_smallest_present(&input), expected);
     }
 
     #[rstest]

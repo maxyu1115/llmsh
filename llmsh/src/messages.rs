@@ -27,7 +27,8 @@ enum Request {
     },
     SaveContext {
         session_id: u32,
-        context_type: ShellOutputType,
+        // None means the context type is still undecided
+        context_type: Option<ShellOutputType>,
         context: String,
     },
     Exit {
@@ -152,7 +153,7 @@ impl HermitdClient {
 
     pub fn save_context(
         &self,
-        context_type: ShellOutputType,
+        context_type: Option<ShellOutputType>,
         context: String,
     ) -> Result<(), util::Error> {
         let save_request = Request::SaveContext {
