@@ -25,8 +25,10 @@ const HERMITD_PROMPT_HEADER: &str = "🌊";
 const HERMITD_RESP_HEADER: &str = "🦀〉";
 
 pub enum ParsedOutput {
-    // InProgress(&'a [u8]),
-    InProgress(Vec<u8>),
+    InProgress {
+        step: Vec<u8>,
+        aggregate_locally: bool,
+    },
     Output {
         output_type: ShellOutputType,
         step: Vec<u8>,
@@ -66,6 +68,7 @@ pub struct ShellProxy {
     io_buffer: [u8; 4096],
     input_parser: ShellInputStateMachine,
     output_parser: Box<dyn ShellOutputParser>,
+    output_aggregation: Vec<u8>,
     input_rl: Reedline,
     rl_prompt: DefaultPrompt,
 }
@@ -317,13 +320,20 @@ impl ShellProxy {
                 let parsed_outputs = self.output_parser.parse_output(&self.io_buffer[..n]);
                 for out in parsed_outputs {
                     match out {
-                        ParsedOutput::InProgress(step) => {
+                        ParsedOutput::InProgress {
+                            step,
+                            aggregate_locally,
+                        } => {
                             // Write data from parent PTY to stdout
                             map_err!(self.stdout_fd.write_all(&step), "Failed to write to stdout")?;
-                            let context = String::from_utf8_lossy(&step).to_string();
-                            log::debug!("Saving context, raw output: {}", context);
-                            let context = parsing::strip_ansi_escape_sequences(&context);
-                            self.hermit_client.save_context(None, context.to_string())?;
+                            if aggregate_locally {
+                                self.output_aggregation.extend(step);
+                            } else {
+                                let context = String::from_utf8_lossy(&step).to_string();
+                                log::debug!("Saving context, raw output: {}", context);
+                                let context = parsing::strip_ansi_escape_sequences(&context);
+                                self.hermit_client.save_context(None, context.to_string())?;
+                            }
                         }
                         ParsedOutput::Output { output_type, step } => {
                             map_err!(self.stdout_fd.write_all(&step), "Failed to write to stdout")?;
@@ -336,7 +346,15 @@ impl ShellProxy {
                                 }
                                 _ => {}
                             }
-                            let context = String::from_utf8_lossy(&step).to_string();
+                            let mut ctx_str: &[u8] = &step;
+                            if !self.output_aggregation.is_empty() {
+                                self.output_aggregation.extend(step);
+                                ctx_str = &self.output_aggregation;
+                            }
+                            let context = String::from_utf8_lossy(&ctx_str).to_string();
+                            if !self.output_aggregation.is_empty() {
+                                self.output_aggregation.clear();
+                            }
                             log::debug!("Saving context, raw output: {}", context);
                             let context = parsing::strip_ansi_escape_sequences(&context);
                             self.hermit_client
@@ -491,6 +509,7 @@ impl ShellCreator for Bash {
             io_buffer: [0; 4096],
             input_parser,
             output_parser,
+            output_aggregation: Vec::new(),
             input_rl: Reedline::create(),
             rl_prompt: DefaultPrompt::new(
                 DefaultPromptSegment::Basic(HERMITD_PROMPT_HEADER.to_string()),
@@ -500,7 +519,7 @@ impl ShellCreator for Bash {
     }
 }
 struct BashParser {
-    parser: parsing::BufferParser<BashState, ShellOutputType>,
+    parser: parsing::BufferParser<BashState, ShellOutputType, bool>,
 }
 
 impl BashParser {
@@ -554,6 +573,11 @@ impl BashParser {
                         ],
                     ),
                 ]),
+                HashMap::from([
+                    (BashState::Idle, false),
+                    (BashState::CmdInput, true),
+                    (BashState::Output, false),
+                ]),
             ),
         }
     }
@@ -565,7 +589,10 @@ impl ShellOutputParser for BashParser {
         return results
             .into_iter()
             .map(|ret| match ret {
-                parsing::StepResults::Echo(out) => ParsedOutput::InProgress(out),
+                parsing::StepResults::Echo { event, step } => ParsedOutput::InProgress {
+                    step,
+                    aggregate_locally: event,
+                },
                 parsing::StepResults::StateChange { event, step } => ParsedOutput::Output {
                     output_type: event,
                     step,

@@ -6,9 +6,9 @@ use std::collections::HashSet;
 use std::hash::Hash;
 
 #[derive(PartialEq, Debug)]
-pub enum StepResults<E: Copy> {
-    Echo(Vec<u8>),
-    StateChange { event: E, step: Vec<u8> },
+pub enum StepResults<E1: Copy, E2: Copy> {
+    StateChange { event: E1, step: Vec<u8> },
+    Echo { event: E2, step: Vec<u8> },
 }
 
 pub enum TransitionCondition {
@@ -16,7 +16,7 @@ pub enum TransitionCondition {
     StringID(String, bool),
 }
 
-pub struct BufferParser<S: Copy + PartialEq + Eq + Hash + std::fmt::Debug, E: Copy> {
+pub struct BufferParser<S: Copy + PartialEq + Eq + Hash + std::fmt::Debug, E1: Copy, E2: Copy> {
     // buffer storing all the buffered input
     input_buffer: Vec<u8>,
     // how much of the buffer is parsed already
@@ -25,18 +25,24 @@ pub struct BufferParser<S: Copy + PartialEq + Eq + Hash + std::fmt::Debug, E: Co
     state: S,
 
     // state -> (transition_condition, next_state, emitted_event)
-    state_map: HashMap<S, Vec<(TransitionCondition, S, E)>>,
+    state_map: HashMap<S, Vec<(TransitionCondition, S, E1)>>,
+
+    // state -> event emmitted when echoing
+    echo_events: HashMap<S, E2>,
 
     // length of input buffer we should retain when no match.
     // This number should be enough to handle all transition conditions
     max_history_length: usize,
 }
 
-impl<S: Copy + PartialEq + Eq + Hash + std::fmt::Debug, E: Copy> BufferParser<S, E> {
+impl<S: Copy + PartialEq + Eq + Hash + std::fmt::Debug, E1: Copy, E2: Copy>
+    BufferParser<S, E1, E2>
+{
     pub fn new(
         state: S,
-        state_map: HashMap<S, Vec<(TransitionCondition, S, E)>>,
-    ) -> BufferParser<S, E> {
+        state_map: HashMap<S, Vec<(TransitionCondition, S, E1)>>,
+        echo_events: HashMap<S, E2>,
+    ) -> BufferParser<S, E1, E2> {
         let max_history_length = 128;
         Self::check_max_history_length(max_history_length, &state_map);
         return BufferParser {
@@ -44,13 +50,14 @@ impl<S: Copy + PartialEq + Eq + Hash + std::fmt::Debug, E: Copy> BufferParser<S,
             parsed_length: 0,
             state,
             state_map,
+            echo_events,
             max_history_length: 128,
         };
     }
 
     fn check_max_history_length(
         max_history_length: usize,
-        state_map: &HashMap<S, Vec<(TransitionCondition, S, E)>>,
+        state_map: &HashMap<S, Vec<(TransitionCondition, S, E1)>>,
     ) {
         for (_, transitions) in state_map.iter() {
             for (transition, _, _) in transitions {
@@ -67,7 +74,7 @@ impl<S: Copy + PartialEq + Eq + Hash + std::fmt::Debug, E: Copy> BufferParser<S,
         self.input_buffer.extend_from_slice(input);
     }
 
-    pub fn step(&mut self) -> Option<StepResults<E>> {
+    pub fn step(&mut self) -> Option<StepResults<E1, E2>> {
         if self.input_buffer.len() == self.parsed_length {
             return Option::None;
         }
@@ -77,7 +84,7 @@ impl<S: Copy + PartialEq + Eq + Hash + std::fmt::Debug, E: Copy> BufferParser<S,
             self.input_buffer
         );
 
-        let transitions: &[(TransitionCondition, S, E)] = &self.state_map[&self.state];
+        let transitions: &[(TransitionCondition, S, E1)] = &self.state_map[&self.state];
         let mut matches = vec![None; transitions.len()];
         for (i, (condition, _, _)) in transitions.iter().enumerate() {
             match condition {
@@ -136,11 +143,14 @@ impl<S: Copy + PartialEq + Eq + Hash + std::fmt::Debug, E: Copy> BufferParser<S,
                     .saturating_sub(self.max_history_length),
             );
             self.parsed_length = self.input_buffer.len();
-            return Some(StepResults::Echo(echo_vec));
+            return Some(StepResults::Echo {
+                event: self.echo_events[&self.state],
+                step: echo_vec,
+            });
         }
     }
 
-    pub fn parse(&mut self, input: &[u8]) -> Vec<StepResults<E>> {
+    pub fn parse(&mut self, input: &[u8]) -> Vec<StepResults<E1, E2>> {
         let mut ret = Vec::new();
         self.buffer(input);
         loop {
@@ -202,7 +212,7 @@ mod tests {
     use rstest::rstest;
     use std::collections::HashMap;
 
-    fn one_state_no_transition_parser() -> BufferParser<i32, Option<()>> {
+    fn one_state_no_transition_parser() -> BufferParser<i32, Option<()>, bool> {
         BufferParser::new(
             0,
             HashMap::from([(
@@ -213,6 +223,7 @@ mod tests {
                     None,
                 )],
             )]),
+            HashMap::from([(0, true)]),
         )
     }
 
@@ -220,7 +231,7 @@ mod tests {
         zero_to_one_id: &str,
         one_to_zero_id: &str,
         visible: bool,
-    ) -> BufferParser<i32, i32> {
+    ) -> BufferParser<i32, i32, bool> {
         BufferParser::new(
             0,
             HashMap::from([
@@ -233,6 +244,7 @@ mod tests {
                     vec![(StringID(one_to_zero_id.to_string(), visible), 0, 1)],
                 ),
             ]),
+            HashMap::from([(0, true), (1, false)]),
         )
     }
 
@@ -262,8 +274,9 @@ mod tests {
         parser.buffer("Random String".as_bytes());
         let result = parser.step().unwrap();
         match result {
-            StepResults::Echo(s) => {
-                assert_eq!(s, "Random String".as_bytes());
+            StepResults::Echo { event, step } => {
+                assert!(event == true);
+                assert_eq!(step, "Random String".as_bytes());
             }
             _ => panic!("Expected StepResults::Echo"),
         }
@@ -272,17 +285,20 @@ mod tests {
     #[rstest]
     #[case("We transition using transition1 to state 1", vec![
         StepResults::StateChange { event: 0, step: to_vec_u8("We transition using transition1") },
-        StepResults::Echo(to_vec_u8(" to state 1")),
+        StepResults::Echo { event: false, step: to_vec_u8(" to state 1") },
     ])]
     #[case("transition0 doesn't work since we are on state 0", vec![
-        StepResults::Echo(to_vec_u8("transition0 doesn't work since we are on state 0")),
+        StepResults::Echo { event: true, step: to_vec_u8("transition0 doesn't work since we are on state 0") },
     ])]
     #[case("transition1transition0transition1", vec![
         StepResults::StateChange { event: 0, step: to_vec_u8("transition1") },
         StepResults::StateChange { event: 1, step: to_vec_u8("transition0") },
         StepResults::StateChange { event: 0, step: to_vec_u8("transition1") },
     ])]
-    fn test_buffer_parser_transition(#[case] input: &str, #[case] expected: Vec<StepResults<i32>>) {
+    fn test_buffer_parser_transition(
+        #[case] input: &str,
+        #[case] expected: Vec<StepResults<i32, bool>>,
+    ) {
         let mut parser = two_state_bidirection_parser("transition1", "transition0", true);
         let result = parser.parse(input.as_bytes());
         assert_eq!(result, expected);
@@ -290,7 +306,7 @@ mod tests {
 
     #[rstest]
     #[case("transition0 is visible", vec![
-        StepResults::Echo(to_vec_u8("transition0 is visible")),
+        StepResults::Echo { event: true, step: to_vec_u8("transition0 is visible") },
     ])]
     #[case("transition1transition0transition1", vec![
         StepResults::StateChange { event: 0, step: vec![] },
@@ -299,7 +315,7 @@ mod tests {
     ])]
     fn test_buffer_parser_id_invisible(
         #[case] input: &str,
-        #[case] expected: Vec<StepResults<i32>>,
+        #[case] expected: Vec<StepResults<i32, bool>>,
     ) {
         let mut parser = two_state_bidirection_parser("transition1", "transition0", false);
         let result = parser.parse(input.as_bytes());
@@ -313,9 +329,10 @@ mod tests {
         // This is probably not ideal behavior. TODO: if a string partially matches the identifier, withold it from echoing
         assert_eq!(
             result1,
-            vec![StepResults::Echo(to_vec_u8(
-                "this input is segmented and tran"
-            ))]
+            vec![StepResults::Echo {
+                event: true,
+                step: to_vec_u8("this input is segmented and tran")
+            }]
         );
         let result2 = parser.parse("sition1 is split in half".as_bytes());
         assert_eq!(
@@ -325,7 +342,10 @@ mod tests {
                     event: 0,
                     step: vec![],
                 },
-                StepResults::Echo(to_vec_u8(" is split in half"))
+                StepResults::Echo {
+                    event: false,
+                    step: to_vec_u8(" is split in half")
+                }
             ]
         );
     }
