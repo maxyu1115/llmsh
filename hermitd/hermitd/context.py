@@ -4,6 +4,7 @@ from typing import Optional
 
 
 IGNORED_TYPES = {ShellOutputType.Header}
+TRUNCATED_MARKER = "##TRUNCATED##"
 
 
 class Context:
@@ -20,22 +21,42 @@ class Context:
         ShellOutputType.Output: 'Shell Output: \\"{}\\"',
     }
 
-    def __init__(self) -> None:
+    def __init__(self, max_chunk_length: int = 4096) -> None:
         self.shell_ctx: list[list[(ShellOutputType, str)]] = []
         self.current_dialogue: list[(ShellOutputType, str)] = []
         self.undecided_stack: list[str] = []
+        self.undecided_stack_len: int = 0
+        self.max_chunk_length: int = max_chunk_length
+
+    def _add_truncate_marker(self):
+        self.undecided_stack.append(TRUNCATED_MARKER)
+        self.undecided_stack_len += len(TRUNCATED_MARKER)
 
     def save_shell_context(self, data_type: Optional[ShellOutputType], data: str):
         if data_type in IGNORED_TYPES:
             self.undecided_stack = []
             return
 
-        self.undecided_stack.append(data)
         if data_type is None:
+            if self.max_chunk_length < self.undecided_stack_len:
+                # when exceeded, don't save anything
+                return
+            elif self.max_chunk_length < self.undecided_stack_len:
+                self._add_truncate_marker()
+                return
+            saving_len = min(
+                self.max_chunk_length - self.undecided_stack_len, len(data)
+            )
+            self.undecided_stack.append(data[:saving_len])
+            self.undecided_stack_len += saving_len
+            if saving_len < len(data):
+                self._add_truncate_marker()
             return
 
+        self.undecided_stack.append(data)
         self.current_dialogue.append((data_type, "".join(self.undecided_stack)))
         self.undecided_stack = []
+        self.undecided_stack_len = 0
 
         if data_type == ShellOutputType.Output:
             # each time we have an output, that marks the end of a "dialogue"
