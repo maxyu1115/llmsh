@@ -1,3 +1,4 @@
+use clap::Parser;
 use log;
 use messages::HermitdClient;
 use mio::{Events, Poll};
@@ -19,13 +20,19 @@ mod pty;
 mod shell;
 mod util;
 
+/// LLM-powered shell copilot that wraps a shell of your choice.
+/// (Only works together with hermitd)
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Name / pathname of the shell you want to wrap.
+    /// If none is supplied, uses the value from $SHELL
+    shell_name: Option<String>,
+}
+
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    let mut shell_name: Option<String> = Option::None;
-    if args.len() > 1 {
-        // Access the first argument (excluding the binary name)
-        shell_name = Option::Some(args[1].clone());
-    }
+    let args = Args::parse();
+    let shell_name: Option<String> = args.shell_name;
 
     let home_dir = expect!(env::var("HOME"), "Could not get home directory");
     expect!(
