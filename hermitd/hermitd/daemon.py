@@ -1,5 +1,5 @@
 import json
-import traceback
+import logging
 import zmq
 from hermitd.bot import Bot
 import hermitd.config as config
@@ -86,22 +86,22 @@ class Hermitd:
         if message == messages.ALIVE_REQ:
             self.zmq_socket.send_string(messages.ALIVE_RESP)
             return
-        print("Recieved:" + message)
+        logging.debug("Recieved:" + message)
         try:
             data = json.loads(message)
             reply = self.handle_message(data)
         except json.JSONDecodeError:
             reply = ILLEGAL_IPC_ERROR
         except Exception as err:
-            traceback.print_exception(err)
+            logging.exception(err)
             reply = messages.Error(type="Error", status=str(err))
 
         reply_json = reply.model_dump_json()
-        print("Reply: " + reply_json)
+        logging.debug("Reply: " + reply_json)
         self.zmq_socket.send_string(reply_json)
 
     def run(self):
-        print("Python server is running...")
+        logging.info("Hermit Daemon is running")
         while True:
             self._run()
 
@@ -134,6 +134,8 @@ def get_llm_provider(cfg: config.Config, secrets: config.Secrets) -> LLMFactory:
 
 def run_daemon(config_path):
     cfg = config.read_config(config_path)
+    logging.basicConfig(format="[%(levelname)s] %(message)s", level=cfg.log_level)
+
     secrets = config.read_api_keys()
 
     llm_provider = get_llm_provider(cfg, secrets)

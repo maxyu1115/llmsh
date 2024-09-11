@@ -1,6 +1,12 @@
+import logging
 import os
 import pytest
 import hermitd.config as config
+
+
+def test_parse_bad_log_level():
+    with pytest.raises(ValueError):
+        config._parse_log_level("???")
 
 
 def test_read_config_file():
@@ -11,7 +17,8 @@ def test_read_config_file():
 
 
 @pytest.mark.parametrize(
-    "config_data, expected", [({"llm": "bad llm tag"}, config.Config(llm=None))]
+    "config_data, expected",
+    [({"llm": "bad llm tag"}, config.Config(llm=None, log_level=logging.INFO))],
 )
 def test_read_bad_config(config_data, expected):
     cfg = config._read_config(config_data)

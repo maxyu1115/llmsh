@@ -1,4 +1,5 @@
 import dataclasses
+import logging
 import os
 from typing import Optional
 import yaml
@@ -8,6 +9,22 @@ from hermitd.llm import SupportedLLMs
 @dataclasses.dataclass
 class Config:
     llm: Optional[SupportedLLMs]
+    log_level: int
+
+
+LOG_LEVELS = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+    "critical": logging.CRITICAL,
+}
+
+
+def _parse_log_level(log_level_str: str) -> int:
+    if log_level_str not in LOG_LEVELS:
+        raise ValueError(f"Unsupported log_level '{log_level_str}'.")
+    return LOG_LEVELS[log_level_str]
 
 
 def _read_config(loaded_yaml):
@@ -17,7 +34,10 @@ def _read_config(loaded_yaml):
     except ValueError:
         llm = None
 
-    return Config(llm=llm)
+    # Defaults to info
+    log_level_str = loaded_yaml.get("log_level", "info")
+    log_level = _parse_log_level(log_level_str)
+    return Config(llm=llm, log_level=log_level)
 
 
 # Wrapper function for _read_config, so that it's easier to test
