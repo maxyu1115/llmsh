@@ -78,6 +78,7 @@ struct ShellInputStateMachine {
 }
 
 enum ShellInputTarget {
+    #[allow(dead_code)]
     // For input echoing since we aren't actually writing to the child shell
     Stdout,
     Pty,

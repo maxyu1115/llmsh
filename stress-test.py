@@ -1,0 +1,1 @@
+print("abcdefg\n" * 100000)

@@ -2,7 +2,7 @@ from enum import Enum
 from typing import Final, Literal, Optional
 from pydantic import BaseModel
 
-API_VERSION: Final[str] = "0.1a"
+API_VERSION: Final[str] = "0.2"
 
 # Alive messages
 ALIVE_REQ: Final[str] = ""

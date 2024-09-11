@@ -55,7 +55,7 @@ enum Response {
 }
 
 const HERMITD_ENDPOINT: &str = "ipc:///tmp/hermitd-ipc";
-const HERMITD_API_VERSION: &str = "0.1a";
+const HERMITD_API_VERSION: &str = "0.2";
 
 const ALIVE_MSG: &str = "";
 const ALIVE_RESP: &str = "Ack";

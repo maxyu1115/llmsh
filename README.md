@@ -1,11 +1,14 @@
 # llmsh
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![GitHub](https://img.shields.io/badge/GitHub-Repository-black?logo=github)](https://github.com/maxyu1115/llmsh)
+
 `llmsh` is a wrapper for your favorite shell, that comes with the llm-powered shell assistant/copilot `hermitd`. It is designed to work just like your underlying shell, except you can also input `:` to switch to a special prompt interface, where you can ask `hermitd` for help.
 
 `hermitd` has full context of your current `llmsh` session, and can provide more insightful suggestions than asking a LLM directly. 
 
 `llmsh` is also intended to provide an extremely convenient way to interact with a LLM.
 
-![image](quick-demo.gif)
+![image](quick-demo-v0.2.0.gif)
 
 ## Setup
 After cloning,
@@ -46,6 +49,8 @@ This was also the main reason `hermitd` takes the form of a daemon, compared to 
 **Also note that `llmsh` does not record keystrokes. It only sends hermitd what the terminal DISPLAYS, rather than what users input. So you don't need to worry about `llmsh` logging your passwords**
 
 ## Limitations
+At the moment only LLM API calls to OpenAI and Anthropic are officially supported. Running LLM's locally are supported for developers, but currently don't have very clear steps on how to set up. (Essentially need things like a GPU, CUDA, vLLM, etc.) Hence local LLM usage is not "officially supported".
+
 Currently this project only supports Linux and bash, due to how `llmsh` relies on OS specific ways to interact with the PTY, as well as shell specific ways to parse the output from the shell.
 
 Because `llmsh` used the `nix` crate extensively, MacOS should be relatively easy to support. Windows on the other hand is a different beast, worst case we will need to rewrite llmsh just to support windows.

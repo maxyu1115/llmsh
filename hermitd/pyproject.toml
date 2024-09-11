@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermitd"
-version = "0.1.0"
+version = "0.2.0"
 description = "llm-powered shell assistant daemon"
 authors = [{name = "Max Yu"}]
 readme = "README.md"
