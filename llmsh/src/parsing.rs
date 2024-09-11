@@ -116,9 +116,16 @@ impl<S: Copy + PartialEq + Eq + Hash + std::fmt::Debug, E1: Copy, E2: Copy>
                     let step: Vec<u8> = if self.parsed_length < end {
                         self.input_buffer[self.parsed_length..end].to_vec()
                     } else {
-                        // there's a weird case where part of the (invisible) identifier was in the previous step
-                        // this causes the previously parsed_length to exceed the end. We output [] in this case
-                        vec![]
+                        // There's a weird case where part of the (invisible) identifier was in the previous step
+                        //  this causes the previously parsed_length to exceed the end.
+                        // We delete the extra in this case, outputting "\b \b" for each additional character
+                        let delete_char = vec![b'\x08', b' ', b'\x08'];
+                        let chars = delete_char.len();
+                        delete_char
+                            .into_iter()
+                            .cycle()
+                            .take(chars * (self.parsed_length - match_idx))
+                            .collect()
                     };
 
                     // transition successful everything up to the marker gets drained
@@ -340,7 +347,7 @@ mod tests {
             vec![
                 StepResults::StateChange {
                     event: 0,
-                    step: vec![],
+                    step: to_vec_u8("\x08 \x08\x08 \x08\x08 \x08\x08 \x08"),
                 },
                 StepResults::Echo {
                     event: false,
