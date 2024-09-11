@@ -112,6 +112,10 @@ def get_llm_provider(cfg: config.Config, secrets: config.Secrets) -> LLMFactory:
         from hermitd.llm.llama3 import Llama3
 
         return SingletonLLMFactory(Llama3())
+    elif cfg.llm == SupportedLLMs.Gemma2:
+        from hermitd.llm.gemma import Gemma2
+
+        return SingletonLLMFactory(Gemma2(secrets.hugging_face))
 
     elif cfg.llm == SupportedLLMs.Claude:
         if not secrets.anthropic:

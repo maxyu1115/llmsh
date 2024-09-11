@@ -30,10 +30,16 @@ def read_config(config_path):
 @dataclasses.dataclass
 class Secrets:
     anthropic: Optional[str]
+    hugging_face: Optional[str]
     openai: Optional[str]
 
 
 def read_api_keys() -> Secrets:
     anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
     openai_api_key = os.environ.get("OPENAI_API_KEY")
-    return Secrets(anthropic=anthropic_api_key, openai=openai_api_key)
+    hugging_face_api_key = os.environ.get("HF_API_KEY")
+    return Secrets(
+        anthropic=anthropic_api_key,
+        openai=openai_api_key,
+        hugging_face=hugging_face_api_key,
+    )

@@ -21,7 +21,8 @@ class ModelID:
 class SupportedLLMs(enum.Enum):
     Claude = ModelID(ModelHost.Anthropic, "claude-3.5")
     GPT = ModelID(ModelHost.OpenAI, "gpt-4o-mini")
-    Llama3 = ModelID(ModelHost.Local, "llama-3")
+    Llama3 = ModelID(ModelHost.Local, "llama-8b")
+    Gemma2 = ModelID(ModelHost.Local, "gemma-2b")
 
     @staticmethod
     def from_tag(string_value):
