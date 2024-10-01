@@ -7,19 +7,20 @@ rust-version = "1.79"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 lazy_static = "1"
 log = "0.4"
 mio = { version = "1", features = ["os-poll", "os-ext"] }
 nix = { version = "0.29", features = ["fs", "ioctl", "process", "signal", "term"] }
 procfs = "0.16"
-reedline = "0.33"
+reedline = "0.35"
 regex = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 signal-hook = "0.3"
 simplelog = "0.12"
-tempfile = "3.1.0"
+tempfile = "3"
 uuid = { version = "1.10", features = ["v4"] }
 zmq = "0.10.0"
 

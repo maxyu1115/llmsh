@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token};
 use nix::fcntl::{fcntl, open, FcntlArg, OFlag};
@@ -12,9 +13,6 @@ use signal_hook::iterator::Signals;
 use std::io::Stdin;
 use std::os::fd::{AsFd, AsRawFd};
 use std::thread;
-
-use crate::map_err;
-use crate::util;
 
 pub fn open_pty() -> (PtyMaster, String) {
     // Open a new PTY master and get the file descriptor
@@ -86,27 +84,25 @@ pub fn setup_parent_pty(parent_fd: &PtyMaster, stdin_fd: &Stdin) -> (Poll, Event
     return (poll, events);
 }
 
-fn get_tpgid(pid: i32) -> Result<i32, util::Error> {
+fn get_tpgid(pid: i32) -> Result<i32> {
     // Open the process information using the PID
-    let process = map_err!(
-        Process::new(pid),
-        "Failed to read proc fs, this only works on linux"
-    )?;
+    let process =
+        Process::new(pid).with_context(|| "Failed to read proc fs, this only works on linux")?;
 
     // Retrieve the process status
-    let stat = map_err!(process.stat(), "")?;
+    let stat = process
+        .stat()
+        .with_context(|| "Failed to retrieve the process status")?;
     return Ok(stat.tpgid);
 }
 
-fn pass_signal(child_pid: i32, sig: Signal) -> Result<(), util::Error> {
+fn pass_signal(child_pid: i32, sig: Signal) -> Result<()> {
     // NOTE that this assumes the tgpid of the child (shell) process is the pid/pgid of the foreground process.
     let pgid = get_tpgid(child_pid)?;
 
     // Send SIGINT to the child process
-    map_err!(
-        nix::sys::signal::killpg(Pid::from_raw(pgid), sig),
-        "Failed to send signal to child"
-    )?;
+    nix::sys::signal::killpg(Pid::from_raw(pgid), sig)
+        .with_context(|| "Failed to send signal to child")?;
 
     return Ok(());
 }

@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Context, Result};
 use core::panic;
 use nix::pty;
 use nix::unistd;
@@ -155,19 +156,20 @@ impl ShellInputStateMachine {
     }
 }
 
-pub fn hermit_print(stdout_fd: &mut Stdout, message: &str) -> Result<(), util::Error> {
+pub fn hermit_print(stdout_fd: &mut Stdout, message: &str) -> Result<()> {
     let wrapped_message = format!("{}{}\n", HERMITD_RESP_HEADER, message).into_bytes();
 
-    map_err!(
-        stdout_fd.write_all(&util::fix_newlines(wrapped_message)),
-        "Failed to write to stdout"
-    )?;
-    map_err!(stdout_fd.flush(), "Failed to flush stdout")?;
+    stdout_fd
+        .write_all(&util::fix_newlines(wrapped_message))
+        .with_context(|| "Failed to write to stdout")?;
+    stdout_fd
+        .flush()
+        .with_context(|| "Failed to flush stdout")?;
     Ok(())
 }
 
 impl ShellProxy {
-    fn _hermit_print(&mut self, message: &str) -> Result<(), util::Error> {
+    fn _hermit_print(&mut self, message: &str) -> Result<()> {
         return hermit_print(&mut self.stdout_fd, message);
     }
 
@@ -183,9 +185,9 @@ impl ShellProxy {
         }
     }
 
-    fn _handle_hermit_prompt(&mut self) -> Result<Option<String>, util::Error> {
+    fn _handle_hermit_prompt(&mut self) -> Result<Option<String>> {
         let result = self.input_rl.read_line(&self.rl_prompt);
-        let signal = map_err!(result, "Unknown error during handling hermitd prompt")?;
+        let signal = result.with_context(|| "Unknown error during handling hermitd prompt")?;
         match signal {
             Signal::Success(input) => {
                 return Ok(Some(input));
@@ -194,10 +196,7 @@ impl ShellProxy {
         }
     }
 
-    fn _handle_hermit_selection(
-        &mut self,
-        commands: &Vec<String>,
-    ) -> Result<Option<String>, util::Error> {
+    fn _handle_hermit_selection(&mut self, commands: &Vec<String>) -> Result<Option<String>> {
         if commands.len() == 0 {
             return Ok(None);
         }
@@ -212,7 +211,7 @@ impl ShellProxy {
             command_choices_message
         ))?;
         let result = self.input_rl.read_line(&self.rl_prompt);
-        let signal = map_err!(result, "Unknown error during handling hermitd prompt")?;
+        let signal = result.with_context(|| "Unknown error during handling hermitd prompt")?;
         match signal {
             Signal::Success(input) => {
                 let trimmed_input = input.trim();
@@ -237,7 +236,7 @@ impl ShellProxy {
         }
     }
 
-    fn handle_hermit(&mut self) -> Result<String, util::Error> {
+    fn handle_hermit(&mut self) -> Result<String> {
         let prompt_option = self._handle_hermit_prompt()?;
         if prompt_option.is_none() {
             // input a new line so that we get a new shell line (and header)
@@ -256,48 +255,42 @@ impl ShellProxy {
         return Ok(format!("\r{}\r", selection));
     }
 
-    fn handle_input_actions(
-        &mut self,
-        actions: ShellInputActions,
-        n: usize,
-    ) -> Result<(), util::Error> {
+    fn handle_input_actions(&mut self, actions: ShellInputActions, n: usize) -> Result<()> {
         for (target, input) in actions {
             match target {
                 ShellInputTarget::Stdout => {
                     log::debug!("Attempting to write to stdout: {:?}", input);
                     let mapped_input: Vec<u8> = util::fix_newlines(input);
-                    map_err!(
-                        self.stdout_fd.write_all(&mapped_input),
-                        "Failed to write to stdout"
-                    )?;
-                    map_err!(self.stdout_fd.flush(), "Failed to flush stdout")?;
+                    self.stdout_fd
+                        .write_all(&mapped_input)
+                        .with_context(|| "Failed to write to stdout")?;
+                    self.stdout_fd
+                        .flush()
+                        .with_context(|| "Failed to flush stdout")?;
                 }
                 ShellInputTarget::Hermit => {
                     let hermit_pty_input = self.handle_hermit()?;
                     self.input_parser.finish_hermit_inputs()?;
-                    map_err!(
-                        self.parent_fd.write_all(hermit_pty_input.as_bytes()),
-                        "Failed to write to parent_fd"
-                    )?;
+                    self.parent_fd
+                        .write_all(hermit_pty_input.as_bytes())
+                        .with_context(|| "Failed to write to parent_fd")?;
                 }
                 ShellInputTarget::Pty => {
-                    map_err!(
-                        self.parent_fd.write_all(&input),
-                        "Failed to write to parent_fd"
-                    )?;
+                    self.parent_fd
+                        .write_all(&input)
+                        .with_context(|| "Failed to write to parent_fd")?;
                 }
                 ShellInputTarget::PassThrough => {
-                    map_err!(
-                        self.parent_fd.write_all(&self.io_buffer[..n]),
-                        "Failed to write to parent_fd"
-                    )?;
+                    self.parent_fd
+                        .write_all(&self.io_buffer[..n])
+                        .with_context(|| "Failed to write to parent_fd")?;
                 }
             }
         }
         Ok(())
     }
 
-    pub fn handle_input(&mut self) -> Result<(), util::Error> {
+    pub fn handle_input(&mut self) -> Result<()> {
         let n = self.stdin_fd.read(&mut self.io_buffer);
         match n {
             Ok(n) if n > 0 => {
@@ -307,12 +300,12 @@ impl ShellProxy {
             Ok(_) => {
                 log::debug!("Nothing to read");
             }
-            Err(e) => return map_err!(Err(e), "Failed to read from stdin"),
+            Err(e) => return Err(e).with_context(|| "Failed to read from stdin"),
         }
         Ok(())
     }
 
-    pub fn handle_output(&mut self) -> Result<bool, util::Error> {
+    pub fn handle_output(&mut self) -> Result<bool> {
         // use unistd::read instead, in order to have nix::errno::Errno::EIO
         let n = unistd::read(self.parent_fd.as_raw_fd(), &mut self.io_buffer);
         match n {
@@ -326,7 +319,9 @@ impl ShellProxy {
                             aggregate_locally,
                         } => {
                             // Write data from parent PTY to stdout
-                            map_err!(self.stdout_fd.write_all(&step), "Failed to write to stdout")?;
+                            self.stdout_fd
+                                .write_all(&step)
+                                .with_context(|| "Failed to write to stdout")?;
                             if aggregate_locally {
                                 self.output_aggregation.extend(step);
                             } else {
@@ -363,14 +358,16 @@ impl ShellProxy {
                         }
                     }
                 }
-                map_err!(self.stdout_fd.flush(), "Failed to flush stdout")?;
+                self.stdout_fd
+                    .flush()
+                    .with_context(|| "Failed to flush stdout")?;
             }
             Ok(_) => {}
             Err(nix::errno::Errno::EIO) => {
                 // EIO indicates the child process has exited
                 return Ok(false);
             }
-            Err(e) => return map_err!(Err(e), "Failed to read from parent_fd"),
+            Err(e) => return Err(e).with_context(|| "Failed to read from parent_fd"),
         }
         return Ok(true);
     }
@@ -393,10 +390,10 @@ impl ShellProxy {
 //     Ok(current_path)
 // }
 
-pub fn get_shell(shell_name: Option<String>) -> Result<Box<dyn ShellCreator>, util::Error> {
+pub fn get_shell(shell_name: Option<String>) -> Result<Box<dyn ShellCreator>> {
     let shell_pathname: String = match shell_name {
         Some(name) => name,
-        None => map_err!(env::var("SHELL"), "$SHELL is not set")?,
+        None => env::var("SHELL").with_context(|| "$SHELL is not set")?,
     };
     if let Some(file_name) = PathBuf::from(&shell_pathname).file_name() {
         let file_name_str = file_name.to_string_lossy();
@@ -407,9 +404,9 @@ pub fn get_shell(shell_name: Option<String>) -> Result<Box<dyn ShellCreator>, ut
             other => return Ok(Box::new(Bash::new(shell_pathname, other.to_string()))),
         }
     } else {
-        return Err(util::Error::Failed(
+        return Err(anyhow!(util::Error::Failed(
             "the SHELL path terminates in '..'".to_string(),
-        ));
+        )));
     }
 }
 

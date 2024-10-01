@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use clap::Parser;
 use log;
 use messages::HermitdClient;
@@ -180,7 +181,7 @@ fn safe_handle_terminal(
     child: Pid,
     mut poll: Poll,
     mut events: Events,
-) -> Result<(), util::Error> {
+) -> Result<()> {
     let mut child_exited = false;
     let mut retry_counter = 0;
 
@@ -190,7 +191,7 @@ fn safe_handle_terminal(
             Ok(()) => {
                 retry_counter = 0;
             }
-            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
                 // We get interrupted errors when we poll while the child process is handling an interrupt
                 // Retry up to MAX_EINTR_RETRY times with minor delays in between
                 if retry_counter < MAX_EINTR_RETRY {
@@ -202,14 +203,13 @@ fn safe_handle_terminal(
                     std::thread::sleep(std::time::Duration::from_millis(100));
                     continue;
                 } else {
-                    return map_err!(
-                        Err(e),
-                        "Repeatedly failed to poll events due to io::ErrorKind::Interrupted"
+                    return Err(e).context(
+                        "Repeatedly failed to poll events due to io::ErrorKind::Interrupted",
                     );
                 }
             }
             Err(e) => {
-                return map_err!(Err(e), "Failed to poll events");
+                return Err(e).context("Failed to poll events");
             }
         };
 
