@@ -60,7 +60,7 @@ fn main() {
     );
 
     // Open a new PTY parent and get the file descriptor
-    let (parent_fd, child_name) = pty::open_pty();
+    let (parent_fd, child_name) = expect!(pty::open_pty(), "Failed to open PTY");
 
     // Fork the process
     match unsafe { expect!(fork(), "Failed to fork process") } {
@@ -77,10 +77,16 @@ fn main() {
                 "Failed to print motd"
             );
 
-            let (poll, events) = pty::setup_parent_pty(&parent_fd, &stdin_fd);
+            let (poll, events) = expect!(
+                pty::setup_parent_pty(&parent_fd, &stdin_fd),
+                "Failed to configure parent PTY"
+            );
 
             // Set terminal to raw mode
-            let original_termios = pty::set_raw_mode(&stdin_fd);
+            let original_termios = expect!(
+                pty::set_raw_mode(&stdin_fd),
+                "Failed to set terminal to raw mode"
+            );
 
             // setup the signal handlers, e.g. for passing through SIGINTs
             let _ = pty::setup_signal_handlers(
@@ -108,12 +114,18 @@ fn main() {
             shell_proxy.exit();
 
             // Restore terminal to original state
-            pty::restore_terminal(std::io::stdin(), &original_termios);
+            expect!(
+                pty::restore_terminal(std::io::stdin(), &original_termios),
+                "Failed to restore terminal"
+            );
             std::process::exit(exit_code);
         }
         ForkResult::Child => {
             // setup the child pty to properly redirect everything to the parent
-            pty::setup_child_pty(child_name);
+            expect!(
+                pty::setup_child_pty(child_name),
+                "Failed to setup child PTY"
+            );
 
             // TODO: use /bin/sh when no SHELL set
             let shell_path: CString = shell_creator.get_path();
@@ -132,7 +144,10 @@ fn main() {
             shell_creator.inject_markers(&temp_rc);
 
             // Set the temporary rc file to user read write only
-            let rc_metadata = std::fs::metadata(temp_rc.path()).unwrap();
+            let rc_metadata = expect!(
+                std::fs::metadata(temp_rc.path()),
+                "Failed to set permissions of ~/.llmshrc"
+            );
             let mut rc_permission = rc_metadata.permissions();
             rc_permission.set_mode(0o600);
 

@@ -16,74 +16,91 @@ use std::thread;
 use crate::map_err;
 use crate::util;
 
-pub fn open_pty() -> (PtyMaster, String) {
+pub fn open_pty() -> Result<(PtyMaster, String), util::Error> {
     // Open a new PTY master and get the file descriptor
-    let master_fd =
-        posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY).expect("Failed to open PTY master");
+    let master_fd = map_err!(
+        posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY),
+        "Failed to open PTY master"
+    )?;
 
     // Grant access to the slave PTY
-    grantpt(&master_fd).expect("Failed to grant PTY access");
+    map_err!(grantpt(&master_fd), "Failed to grant PTY access")?;
 
     // Unlock the slave PTY
-    unlockpt(&master_fd).expect("Failed to unlock PTY");
+    map_err!(unlockpt(&master_fd), "Failed to unlock PTY")?;
 
     // Get the name of the slave PTY
     // FIXME: ptsname_r does not work on windows/mac
-    let child_name = ptsname_r(&master_fd).expect("Failed to get slave PTY name");
+    let child_name = map_err!(ptsname_r(&master_fd), "Failed to get slave PTY name")?;
 
-    return (master_fd, child_name);
+    return Ok((master_fd, child_name));
 }
 
-pub fn setup_child_pty(child_name: String) {
+pub fn setup_child_pty(child_name: String) -> Result<(), util::Error> {
     // Child process: Start a new session and set the slave PTY as the controlling terminal
-    setsid().expect("Failed to create new session");
+    map_err!(setsid(), "Failed to create new session")?;
 
-    let child_fd = open(
-        child_name.as_str(),
-        OFlag::O_RDWR,
-        nix::sys::stat::Mode::empty(),
-    )
-    .expect("Failed to open slave PTY");
+    let child_fd = map_err!(
+        open(
+            child_name.as_str(),
+            OFlag::O_RDWR,
+            nix::sys::stat::Mode::empty(),
+        ),
+        "Failed to open slave PTY"
+    )?;
 
     // Set the slave PTY as stdin, stdout, and stderr
-    dup2(child_fd, 0).expect("Failed to duplicate slave PTY to stdin");
-    dup2(child_fd, 1).expect("Failed to duplicate slave PTY to stdout");
-    dup2(child_fd, 2).expect("Failed to duplicate slave PTY to stderr");
+    map_err!(dup2(child_fd, 0), "Failed to duplicate slave PTY to stdin")?;
+    map_err!(dup2(child_fd, 1), "Failed to duplicate slave PTY to stdout")?;
+    map_err!(dup2(child_fd, 2), "Failed to duplicate slave PTY to stderr")?;
 
     // Close the slave PTY file descriptor
-    close(child_fd).expect("Failed to close slave PTY file descriptor");
+    map_err!(close(child_fd), "Failed to close slave PTY file descriptor")?;
+    Ok(())
 }
 
 pub const PARENT_TOK: Token = Token(0);
 pub const STDIN_TOK: Token = Token(1);
 
-pub fn setup_parent_pty(parent_fd: &PtyMaster, stdin_fd: &Stdin) -> (Poll, Events) {
+pub fn setup_parent_pty(
+    parent_fd: &PtyMaster,
+    stdin_fd: &Stdin,
+) -> Result<(Poll, Events), util::Error> {
     // Parent process: Set up non-blocking I/O and polling
-    let poll = Poll::new().expect("Failed to create Poll instance");
+    let poll = map_err!(Poll::new(), "Failed to create Poll instance")?;
     let events = Events::with_capacity(1024);
 
     let raw_parent_fd = parent_fd.as_raw_fd();
     let raw_stdin_fd = stdin_fd.as_raw_fd();
 
-    fcntl(raw_parent_fd, FcntlArg::F_SETFL(OFlag::O_NONBLOCK)).expect("Failed to set non-blocking");
-    fcntl(raw_stdin_fd, FcntlArg::F_SETFL(OFlag::O_NONBLOCK)).expect("Failed to set non-blocking");
+    map_err!(
+        fcntl(raw_parent_fd, FcntlArg::F_SETFL(OFlag::O_NONBLOCK)),
+        "Failed to set non-blocking"
+    )?;
+    map_err!(
+        fcntl(raw_stdin_fd, FcntlArg::F_SETFL(OFlag::O_NONBLOCK)),
+        "Failed to set non-blocking"
+    )?;
 
     // Register the parent PTY and stdin file descriptors with the poll instance
-    poll.registry()
-        .register(
+    map_err!(
+        poll.registry().register(
             &mut SourceFd(&raw_parent_fd),
             PARENT_TOK,
             Interest::READABLE,
-        )
-        .expect("Failed to register parent_fd");
-    poll.registry()
-        .register(&mut SourceFd(&raw_stdin_fd), STDIN_TOK, Interest::READABLE)
-        .expect("Failed to register stdin_fd");
+        ),
+        "Failed to register parent_fd"
+    )?;
+    map_err!(
+        poll.registry()
+            .register(&mut SourceFd(&raw_stdin_fd), STDIN_TOK, Interest::READABLE),
+        "Failed to register stdin_fd"
+    )?;
 
     // Sync the current terminal size
     sync_terminal_size(raw_parent_fd, raw_stdin_fd);
 
-    return (poll, events);
+    return Ok((poll, events));
 }
 
 fn get_tpgid(pid: i32) -> Result<i32, util::Error> {
@@ -115,14 +132,16 @@ pub fn setup_signal_handlers(
     parent_fd: i32,
     child_fd: i32,
     child_pid: i32,
-) -> thread::JoinHandle<()> {
-    let mut signals = Signals::new(&[
-        signal::SIGINT,
-        signal::SIGTSTP,
-        signal::SIGQUIT,
-        signal::SIGWINCH,
-    ])
-    .expect("Failed to create signal handler");
+) -> Result<thread::JoinHandle<()>, util::Error> {
+    let mut signals = map_err!(
+        Signals::new(&[
+            signal::SIGINT,
+            signal::SIGTSTP,
+            signal::SIGQUIT,
+            signal::SIGWINCH,
+        ]),
+        "Failed to create signal handler"
+    )?;
 
     let handler_thread = thread::spawn(move || {
         for sig in signals.forever() {
@@ -148,11 +167,11 @@ pub fn setup_signal_handlers(
             }
         }
     });
-    return handler_thread;
+    return Ok(handler_thread);
 }
 
-pub fn set_raw_mode<Fd: AsFd>(fd: &Fd) -> Termios {
-    let original_termios = termios::tcgetattr(fd).expect("Failed to get terminal attributes");
+pub fn set_raw_mode<Fd: AsFd>(fd: &Fd) -> Result<Termios, util::Error> {
+    let original_termios = map_err!(termios::tcgetattr(fd), "Failed to get terminal attributes")?;
     let mut raw_termios = original_termios.clone();
     // raw_termios.input_flags &= !(InputFlags::ICRNL | InputFlags::IXON | InputFlags::BRKINT | InputFlags::INPCK | InputFlags::ISTRIP | InputFlags::IXANY);
     // raw_termios.output_flags &= !termios::OutputFlags::OPOST;
@@ -164,14 +183,19 @@ pub fn set_raw_mode<Fd: AsFd>(fd: &Fd) -> Termios {
     // We handle and pass in those signals manually, to ensure they aren't effected by io load
     raw_termios.local_flags.insert(LocalFlags::ISIG);
 
-    termios::tcsetattr(fd, SetArg::TCSANOW, &raw_termios)
-        .expect("Failed to set terminal to raw mode");
-    original_termios
+    map_err!(
+        termios::tcsetattr(fd, SetArg::TCSANOW, &raw_termios),
+        "Failed to set terminal to raw mode"
+    )?;
+    Ok(original_termios)
 }
 
-pub fn restore_terminal<Fd: AsFd>(fd: Fd, termios: &Termios) {
-    termios::tcsetattr(fd, SetArg::TCSANOW, termios)
-        .expect("Failed to restore terminal attributes");
+pub fn restore_terminal<Fd: AsFd>(fd: Fd, termios: &Termios) -> Result<(), util::Error> {
+    map_err!(
+        termios::tcsetattr(fd, SetArg::TCSANOW, termios),
+        "Failed to restore terminal attributes"
+    )?;
+    Ok(())
 }
 
 // Function to get the terminal window size
